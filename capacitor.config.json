@@ -1,0 +1,10 @@
+{
+  "appId": "com.tabikaeru.travelfrog",
+  "appName": "旅行青蛙",
+  "webDir": "www",
+  "ios": { "contentInset": "automatic" },
+  "android": { "allowMixedContent": true },
+  "plugins": {
+    "StatusBar": { "style": "LIGHT", "backgroundColor": "#e8dcc0" }
+  }
+}

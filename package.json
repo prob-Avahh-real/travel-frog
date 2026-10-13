@@ -1,0 +1,20 @@
+{
+  "name": "travel-frog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "旅行青蛙复刻 · Tabikaeru-like idle travel game",
+  "scripts": {
+    "build": "node scripts/build-web.js",
+    "test": "node --test test/*.test.js",
+    "smoke": "node scripts/smoke-browser.js",
+    "shot": "node scripts/smoke-browser.js --shot /tmp/travel-frog-home.png",
+    "serve": "python3 -m http.server 8765"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "jsdom": "^30.0.1"
+  }
+}

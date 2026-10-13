@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>旅行青蛙 · 美术对开页（开发用）</title>
+<link rel="stylesheet" href="../css/style.css">
+<style>
+  body{margin:0;padding:20px;background:#f3ead3;font-family:"PingFang SC",system-ui,sans-serif;color:#4a3f2f}
+  h1{font-size:18px;margin:0 0 4px}
+  h2{font-size:13px;margin:26px 0 8px;color:#7a6b52;border-bottom:1px solid #d6c7a4;padding-bottom:4px}
+  .note{font-size:11px;color:#7a6b52;margin-bottom:14px}
+  .grid{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
+  .cell{background:#fffdf6;border:2px solid #d6c7a4;border-radius:10px;padding:6px;width:170px}
+  .cell .box{aspect-ratio:320/220;border-radius:5px;overflow:hidden;background:#e8dcc0}
+  .cell .box svg{display:block;width:100%;height:100%}
+  .cell .lbl{font-size:10px;font-weight:700;margin-top:5px;text-align:center}
+  .poses .cell{width:96px}
+  .poses .box{aspect-ratio:80/84;display:grid;place-items:center;background:#efe4c8}
+  .poses .box svg{width:78%;height:78%}
+  .icons .cell{width:74px;padding:4px}
+  .icons .box{display:grid;place-items:center;aspect-ratio:1}
+</style>
+</head>
+<body>
+<h1>旅行青蛙 · 美术对开页</h1>
+<div class="note">开发用（不进 App 包）。用来检查每个地点 × 时段的风景、青蛙全部姿态、以及图标是否画得出来、长得顺眼。</div>
+<div id="out"></div>
+<script src="../js/data.js"></script>
+<script src="../js/art.js"></script>
+<script>
+(function () {
+  var D = window.TF.DATA, Art = window.TF.Art;
+  var TIMES = ['dawn', 'day', 'dusk', 'night'];
+  var TIME_CN = { dawn: '清晨', day: '白天', dusk: '黄昏', night: '夜里' };
+  var out = document.getElementById('out');
+
+  /* 每个地点 × 每个时段 */
+  var html = '<h2>风景：' + D.LOCATIONS.length + ' 地点 × 4 时段</h2><div class="grid">';
+  D.LOCATIONS.forEach(function (l) {
+    TIMES.forEach(function (t) {
+      html += '<div class="cell"><div class="box">' + Art.sceneSVG(l.scene, t, l.id) + '</div>' +
+        '<div class="lbl">' + l.name + ' · ' + TIME_CN[t] + '（' + l.dist + '）</div></div>';
+    });
+  });
+  html += '</div>';
+
+  /* 青蛙姿态 */
+  html += '<h2>青蛙：全部姿态</h2><div class="grid poses">';
+  Object.keys(Art.POSES).forEach(function (p) {
+    html += '<div class="cell"><div class="box">' + Art.frogSVG(p) + '</div><div class="lbl">' + p + '</div></div>';
+  });
+  html += '</div>';
+
+  /* 图标 */
+  html += '<h2>图标</h2><div class="grid icons">';
+  D.FOODS.forEach(function (f) { html += '<div class="cell"><div class="box">' + Art.itemIcon('food', f.id, 46) + '</div><div class="lbl">' + f.name + '</div></div>'; });
+  D.ITEMS.forEach(function (i) { html += '<div class="cell"><div class="box">' + Art.itemIcon('item', i.id, 46) + '</div><div class="lbl">' + i.name + '</div></div>'; });
+  html += '</div>';
+
+  /* 明信片版面（复用 App 自己的样式，所见即所得） */
+  html += '<h2>明信片版面</h2><div class="grid">';
+  var picks = [['beach', 'dusk', 'sit', '看着太阳掉进水里。', 'common'], ['snow', 'dawn', 'look', '看到云海了。', 'epic'],
+    ['tropics', 'night', 'look', '看见萤火虫了。', 'epic'], ['forest', 'dusk', 'sit', '在这儿坐了会儿，听鸟叫。', 'rare']];
+  picks.forEach(function (p) {
+    var loc = D.LOCATIONS.filter(function (l) { return l.scene === p[0]; })[0];
+    html += '<div style="width:230px">' +
+      '<span style="display:none"></span>' +
+      '<div class="card r-' + p[4] + '"><span class="badge">' + D.RARITY[p[4]].name + '</span>' +
+      '<div class="photo">' + Art.sceneSVG(p[0], p[1], 'sheet-' + p[0]) + '</div>' +
+      '<div class="cap">' + p[3] + '</div>' +
+      '<div class="meta"><span>' + (loc ? loc.name : '?') + ' · ' + TIME_CN[p[1]] + '</span><span>刚刚</span></div></div></div>';
+  });
+  html += '</div>';
+
+  /* 奖励：一天里各时段都试一遍同一地点，看稳定性 */
+  html += '<h2>稳定性：同一地点四次抽样（种子 = 地点+时段+id）</h2><div class="grid">';
+  TIMES.forEach(function (t) {
+    html += '<div class="cell"><div class="box">' + Art.sceneSVG('beach', t, 'seed-' + t) + '</div><div class="lbl">海边 · ' + TIME_CN[t] + '</div></div>';
+  });
+  html += '</div>';
+
+  out.innerHTML = html;
+})();
+</script>
+</body>
+</html>
