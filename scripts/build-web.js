@@ -8,9 +8,12 @@ const www = path.join(root, 'www');
 const ASSETS = [
   'index.html',
   'css/style.css',
+  'css/flight.css',
   'js/data.js',
   'js/engine.js',
   'js/art.js',
+  'js/scene.js',
+  'js/world.js',
   'js/ui.js',
   'js/main.js'
 ];

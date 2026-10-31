@@ -3,10 +3,11 @@
  * ------------------------------------------------------------
  * 单一职责：把数据表渲染成 SVG 字符串。纯函数、零副作用、零 DOM，
  * 所以在 Node 里也能直接断言（见 test/ 的 art 用例）。
- * 三个出口：
- *   frogSVG(pose, opts)          青蛙（家里的姿态 + 明信片里的姿态）
+ * 出口：
  *   sceneSVG(kind, time, seed)   明信片风景
  *   itemIcon(kind, id, size)     便当 / 道具 / 特产 图标
+ *   bundleSVG(kind, id, px)      商店货格上的布包
+ * 青蛙只有一个渲染器（js/scene.js 的 frogFigure），明信片直接借用。
  * 新增一种风景：在 FEATURES 里加一个 key 的函数即可，主流程不动。
  * ============================================================ */
 (function (root, factory) {
@@ -340,7 +341,14 @@
     return o.join('');
   }
 
-  /* ---------- 明信片里的青蛙（小尺寸，按场景摆位） ---------- */
+  /* ---------- 明信片里的青蛙：直接借用场景模块那只（只有一个渲染器） ---------- */
+  function sceneModule() {
+    if (typeof module === 'object' && module.exports) return require('./scene.js');
+    return (typeof window !== 'undefined' && window.TF) ? window.TF.Scene : null;
+  }
+  /* scene.js 的青蛙以「身体中心」为原点，这里的 place 给的是脚底落点，
+     而青蛙原点在身体中心 → 往上抬 (42 + 34*0.95) * scale 让脚正好踩在 place[1] 上 */
+  var FROG_ORIGIN_Y = 42, FROG_FEET_Y = 34, FROG_INNER = 0.95;
   function frogInScene(time, r, kind) {
     var place = {
       beach: [232, 178, .62, 'walk'], lake: [96, 172, .6, 'look'], onsen: [150, 178, .62, 'bath'],
@@ -349,130 +357,19 @@
       temple: [116, 182, .58, 'sit'], castle: [96, 172, .56, 'look'], town: [96, 182, .58, 'walk'],
       forest: [110, 184, .6, 'walk'], field: [110, 184, .6, 'walk']
     }[kind] || [110, 184, .6, 'walk'];
+    var Sc = sceneModule();
+    var s = place[2];
     var wiggle = (r() - 0.5) * 8;
-    var g = '<g transform="translate(' + r2(place[0] + wiggle) + ',' + r2(place[1]) + ') scale(' + place[2] + ')">';
-    g += frogSVG(place[3], { bare: true, time: time }).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
-    g += '</g>';
+    var fx = r2(place[0] + wiggle);                       // 脚底横坐标
+    var fy = place[1];                                    // 脚底纵坐标
+    var top = r2(fy - (FROG_ORIGIN_Y + FROG_FEET_Y * FROG_INNER) * s);
+    var night = time === 'night' || time === 'dusk';
+    var g = '<g transform="translate(' + fx + ',' + top + ') scale(' + s + ')">' +
+      '<g transform="translate(' + FROG_ORIGIN_Y + ' ' + FROG_ORIGIN_Y + ') scale(' + FROG_INNER + ')">' +
+      (Sc ? Sc.frogFigure(place[3], { night: night }) : '') + '</g></g>';
     // 影子
-    var sh = '<ellipse cx="' + r2(place[0] + wiggle) + '" cy="' + r2(place[1] + 3) + '" rx="15" ry="4.5" fill="#000" opacity=".16"/>';
+    var sh = '<ellipse cx="' + fx + '" cy="' + r2(fy) + '" rx="15" ry="4.5" fill="#000" opacity=".16"/>';
     return sh + g;
-  }
-
-  /* ============================================================
-   * 青蛙本体：分层 SVG，姿态通过「部件开关」表达
-   * ============================================================ */
-  var POSES = {
-    idle:    { eyes: 'open',   arms: 'down',    legs: 'stand' },
-    walk:    { eyes: 'open',   arms: 'swing',   legs: 'walk' },
-    sit:     { eyes: 'open',   arms: 'down',    legs: 'sit' },
-    look:    { eyes: 'up',     arms: 'down',    legs: 'stand' },
-    eat:     { eyes: 'open',   arms: 'front',   legs: 'sit',    prop: 'bowl' },
-    read:    { eyes: 'down',   arms: 'front',   legs: 'sit',    prop: 'book' },
-    write:   { eyes: 'down',   arms: 'front',   legs: 'sit',    prop: 'letter' },
-    whittle: { eyes: 'down',   arms: 'front',   legs: 'sit',    prop: 'wood' },
-    nap:     { eyes: 'closed', arms: 'down',    legs: 'sit',    prop: 'zzz' },
-    sleep:   { eyes: 'closed', arms: 'down',    legs: 'lie',    prop: 'zzz' },
-    swim:    { eyes: 'open',   arms: 'down',    legs: 'none' },
-    bath:    { eyes: 'closed', arms: 'down',    legs: 'none',   prop: 'steam' },
-    climb:   { eyes: 'open',   arms: 'up',      legs: 'walk' },
-    umbrella:{ eyes: 'open',   arms: 'up',      legs: 'walk',   prop: 'umbrella' },
-    eat_big: { eyes: 'open',   arms: 'front',   legs: 'sit',    prop: 'bowl' }
-  };
-
-  function frogSVG(pose, opts) {
-    opts = opts || {};
-    var P = POSES[pose] || POSES.idle;
-    var skin = opts.night ? '#69a844' : '#7cbb50';
-    var skinD = opts.night ? '#4f8636' : '#619a3e';
-    var belly = '#dbe9b8';
-    var o = [];
-    o.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 84" class="frog-svg" overflow="visible">');
-    o.push('<g class="frog-body">');
-
-    // 腿
-    if (P.legs === 'stand') {
-      o.push('<ellipse cx="28" cy="72" rx="11" ry="7" fill="' + skinD + '"/>');
-      o.push('<ellipse cx="52" cy="72" rx="11" ry="7" fill="' + skinD + '"/>');
-    } else if (P.legs === 'walk') {
-      o.push('<ellipse class="leg-a" cx="24" cy="72" rx="11" ry="7" fill="' + skinD + '"/>');
-      o.push('<ellipse class="leg-b" cx="56" cy="70" rx="11" ry="7" fill="' + skinD + '"/>');
-    } else if (P.legs === 'sit') {
-      o.push('<ellipse cx="22" cy="74" rx="13" ry="7" fill="' + skinD + '"/>');
-      o.push('<ellipse cx="58" cy="74" rx="13" ry="7" fill="' + skinD + '"/>');
-    } else if (P.legs === 'lie') {
-      o.push('<ellipse cx="20" cy="76" rx="12" ry="6" fill="' + skinD + '"/>');
-    }
-
-    // 后腿（侧面观感）
-    o.push('<ellipse cx="18" cy="60" rx="9" ry="13" fill="' + skinD + '" transform="rotate(-14 18 60)"/>');
-    o.push('<ellipse cx="62" cy="60" rx="9" ry="13" fill="' + skinD + '" transform="rotate(14 62 60)"/>');
-
-    // 身体
-    o.push('<ellipse cx="40" cy="56" rx="24" ry="20" fill="' + skin + '"/>');
-    o.push('<ellipse cx="40" cy="61" rx="15" ry="13" fill="' + belly + '" opacity=".85"/>');
-
-    // 手
-    var armY = 52, armX = 17;
-    if (P.arms === 'down') {
-      o.push('<ellipse cx="' + armX + '" cy="' + (armY + 5) + '" rx="5.5" ry="9" fill="' + skinD + '"/>');
-      o.push('<ellipse cx="' + (80 - armX) + '" cy="' + (armY + 5) + '" rx="5.5" ry="9" fill="' + skinD + '"/>');
-    } else if (P.arms === 'swing') {
-      o.push('<ellipse class="arm-a" cx="' + armX + '" cy="' + (armY + 4) + '" rx="5.5" ry="9" fill="' + skinD + '"/>');
-      o.push('<ellipse class="arm-b" cx="' + (80 - armX) + '" cy="' + (armY + 6) + '" rx="5.5" ry="9" fill="' + skinD + '"/>');
-    } else if (P.arms === 'front') {
-      o.push('<ellipse cx="30" cy="60" rx="5.5" ry="8" fill="' + skinD + '"/>');
-      o.push('<ellipse cx="50" cy="60" rx="5.5" ry="8" fill="' + skinD + '"/>');
-    } else if (P.arms === 'up') {
-      o.push('<ellipse cx="19" cy="40" rx="5.5" ry="9" fill="' + skinD + '" transform="rotate(22 19 40)"/>');
-      o.push('<ellipse cx="61" cy="40" rx="5.5" ry="9" fill="' + skinD + '" transform="rotate(-22 61 40)"/>');
-    }
-
-    // 头（青蛙是圆头，与身体连成一体）
-    o.push('<ellipse cx="40" cy="34" rx="22" ry="18" fill="' + skin + '"/>');
-    // 眼窝
-    o.push('<circle cx="29" cy="20" r="11" fill="' + skin + '"/>');
-    o.push('<circle cx="51" cy="20" r="11" fill="' + skin + '"/>');
-    o.push('<circle cx="29" cy="21" r="8.5" fill="#fdfdf6"/>');
-    o.push('<circle cx="51" cy="21" r="8.5" fill="#fdfdf6"/>');
-
-    // 眼珠
-    function pupil(cx, cy) {
-      if (P.eyes === 'closed') return '<path d="M' + (cx - 6) + ' ' + cy + ' q 6 5 12 0" stroke="#2b3a1e" stroke-width="2.4" fill="none" stroke-linecap="round"/>';
-      if (P.eyes === 'up') return '<circle cx="' + cx + '" cy="' + (cy - 2.5) + '" r="4" fill="#2b3a1e"/><circle cx="' + (cx + 1.4) + '" cy="' + (cy - 4) + '" r="1.4" fill="#fff"/>';
-      if (P.eyes === 'down') return '<circle cx="' + cx + '" cy="' + (cy + 2.5) + '" r="4" fill="#2b3a1e"/><circle cx="' + (cx + 1.4) + '" cy="' + (cy + 1) + '" r="1.4" fill="#fff"/>';
-      return '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="#2b3a1e"/><circle cx="' + (cx + 1.5) + '" cy="' + (cy - 1.6) + '" r="1.5" fill="#fff"/>';
-    }
-    o.push(pupil(29, 21));
-    o.push(pupil(51, 21));
-
-    // 嘴
-    if (P.eyes === 'closed' && (pose === 'sleep' || pose === 'nap')) {
-      o.push('<ellipse cx="40" cy="40" rx="4" ry="3" fill="#3a4a24" opacity=".8"/>');
-    } else {
-      o.push('<path d="M31 39 q 9 7 18 0" stroke="#3a4a24" stroke-width="2.2" fill="none" stroke-linecap="round"/>');
-    }
-    // 腮红
-    o.push('<ellipse cx="20" cy="36" rx="5" ry="3.4" fill="#f2a0a0" opacity=".55"/>');
-    o.push('<ellipse cx="60" cy="36" rx="5" ry="3.4" fill="#f2a0a0" opacity=".55"/>');
-
-    // 手边小物
-    if (P.prop === 'bowl') {
-      o.push('<ellipse cx="40" cy="66" rx="11" ry="4.5" fill="#c99a63"/><path d="M29 66 q 11 12 22 0" fill="#e2b380"/><ellipse cx="40" cy="66" rx="9" ry="3" fill="#fff8e6"/>');
-    } else if (P.prop === 'book') {
-      o.push('<g transform="translate(40,66)"><path d="M-13 0 L0 -4 L13 0 L0 4 Z" fill="#f4efe0"/><path d="M-12 0 L0 -3.6 L0 3.4 Z" fill="#e3d9c0"/><path d="M-13 0 L-13 8 L0 5 L0 -4 Z" fill="#fbf7ec"/><path d="M13 0 L13 8 L0 5 L0 -4 Z" fill="#f4efe0"/></g>');
-    } else if (P.prop === 'letter') {
-      o.push('<rect x="28" y="60" width="24" height="15" rx="2" fill="#fdf8ea" stroke="#d8c9a8"/><path d="M28 61 L40 69 L52 61" stroke="#d8c9a8" fill="none"/>');
-    } else if (P.prop === 'wood') {
-      o.push('<rect x="30" y="62" width="20" height="7" rx="3" fill="#c99a63"/><path d="M40 58 L47 66" stroke="#9aa4ae" stroke-width="2.6" stroke-linecap="round"/>');
-    } else if (P.prop === 'zzz') {
-      o.push('<text class="zzz" x="60" y="16" font-size="13" fill="#8fa8c0" font-family="sans-serif">z</text><text class="zzz z2" x="68" y="8" font-size="10" fill="#a8bcd0" font-family="sans-serif">z</text>');
-    } else if (P.prop === 'steam') {
-      o.push('<path class="steam" d="M28 12 c 5 -8 -4 -12 0 -20" stroke="#fff" stroke-width="2.4" fill="none" opacity=".6"/><path class="steam s2" d="M54 12 c 5 -8 -4 -12 0 -20" stroke="#fff" stroke-width="2.4" fill="none" opacity=".6"/>');
-    } else if (P.prop === 'umbrella') {
-      o.push('<path d="M40 6 q -26 4 -26 4 q 10 -18 26 -18 q 16 0 26 18 q 0 0 -26 -4 Z" fill="#8fc0e0"/><rect x="39.2" y="10" width="1.8" height="22" fill="#8a7a64"/>');
-    }
-    o.push('</g></svg>');
-    return o.join('');
   }
 
   /* ============================================================
@@ -504,8 +401,87 @@
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="' + size + '" height="' + size + '" class="icon-svg ' + (kind || '') + '">' + fn() + '</svg>';
   }
 
+  /* ============================================================
+   * 商店货格：布包（原作的便当/道具都是包在布巾里的）
+   * 布巾颜色按 id 确定性取，同一件东西永远同一个花色。
+   * ============================================================ */
+  var CLOTHS = [
+    { c: '#efc9d4', d: '#ddaebd', dot: '#f8e4ea' },   // 粉
+    { c: '#c3e0a8', d: '#a3c785', dot: '#dcf0c6' },   // 绿
+    { c: '#b7d8ea', d: '#93bcd4', dot: '#d6eaf5' },   // 蓝
+    { c: '#f0dda0', d: '#d7bf7c', dot: '#f9edc4' },   // 黄
+    { c: '#e5d5c0', d: '#cab69b', dot: '#f4ead9' },   // 米
+    { c: '#d9c3e0', d: '#bca1c6', dot: '#ecdff2' }    // 紫
+  ];
+  function bundleSVG(kind, id, px) {
+    px = px || 96;
+    var cl = CLOTHS[hashStr(String(id)) % CLOTHS.length];
+    var ink = '#4b433a';
+    var inner = (ICONS[id] || ICONS.souvenir)();
+    var dots = '';
+    [[34, 42, 2.8], [66, 46, 2.8], [40, 56, 2.4], [62, 60, 2.4]].forEach(function (d) {
+      dots += '<circle cx="' + d[0] + '" cy="' + d[1] + '" r="' + d[2] + '" fill="' + cl.dot + '"/>';
+    });
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="' + px + '" height="' + px +
+      '" class="bundle-svg" aria-hidden="true">' +
+      /* 布包主体 */
+      '<path d="M16 32 Q14 22 26 22 L74 22 Q86 22 84 32 L86 82 Q88 94 76 94 L24 94 Q12 94 14 82 Z" fill="' + cl.c +
+      '" stroke="' + ink + '" stroke-width="2.4" stroke-linejoin="round"/>' + dots +
+      /* 包着的便当 / 道具 */
+      '<g transform="translate(50 56) scale(1.5) translate(-16 -16)">' + inner + '</g>' +
+      /* 前襟（盖住下半，读起来就是"包起来"） */
+      '<path d="M14 66 Q30 57 50 63 Q70 69 86 61 L86 82 Q88 94 76 94 L24 94 Q12 94 14 82 Z" fill="' + cl.d +
+      '" stroke="' + ink + '" stroke-width="2.2" stroke-linejoin="round"/>' +
+      /* 顶上的结 */
+      '<path d="M40 25 Q41 8 50 10 Q59 8 60 25 Q50 31 40 25 Z" fill="' + cl.d +
+      '" stroke="' + ink + '" stroke-width="2.2" stroke-linejoin="round"/>' +
+      '<path d="M44 22 Q50 28 56 22" fill="none" stroke="' + ink + '" stroke-width="1.6"/>' +
+      '</svg>';
+  }
+
+  /* ============================================================
+   * 手绘面板边框：真 SVG 路径（不是 CSS 圆角框）
+   * ------------------------------------------------------------
+   * CSS 边框做不出手绘感的两件事：四条边各自歪、角上"出锋"（手画时笔收不住）。
+   * 所以边框交给真路径：每条边一个二次曲线（中点带确定性外凸/内凹），两端各延长 0-5%。
+   * UI 层量出元素尺寸后用它生成一张覆盖用的 <svg>；这里是纯函数，可在 Node 里断言。
+   * ============================================================ */
+  function sketchBox(w, h, seed, opt) {
+    opt = opt || {};
+    function rr(x) { return Math.round(x * 100) / 100; }
+    var pad = opt.pad === undefined ? 3 : opt.pad;
+    var L = pad, R = w - pad, T = pad, B = h - pad;
+    if (R - L < 10 || B - T < 10) return '';
+    var k = opt.k === undefined ? 1.5 : opt.k;
+    function jf(i, a) {
+      var x = Math.sin((seed + i) * 127.1 + 311.7) * 43758.5453;
+      return ((x - Math.floor(x)) * 2 - 1) * a;
+    }
+    var r = Math.min(opt.r === undefined ? 7 : opt.r, (R - L) / 4, (B - T) / 4);
+    function edge(x1, y1, x2, y2, i, dir) {
+      var nx = -(y2 - y1), ny = (x2 - x1), nl = Math.sqrt(nx * nx + ny * ny) || 1;
+      nx /= nl; ny /= nl;
+      var mx = (x1 + x2) / 2 + nx * jf(i, k) * dir;
+      var my = (y1 + y2) / 2 + ny * jf(i, k) * dir;
+      var o1 = jf(i + 1, 0.05), o2 = jf(i + 2, 0.05);
+      var ax = x1 - (x2 - x1) * o1, ay = y1 - (y2 - y1) * o1;
+      var bx = x2 + (x2 - x1) * o2, by = y2 + (y2 - y1) * o2;
+      return 'M' + rr(ax) + ' ' + rr(ay) + ' Q' + rr(mx) + ' ' + rr(my) + ' ' + rr(bx) + ' ' + rr(by);
+    }
+    var d = edge(L + r, T, R - r, T, 1, -1) + edge(R, T + r, R, B - r, 11, 1) +
+            edge(R - r, B, L + r, B, 21, 1) + edge(L, B - r, L, T + r, 31, -1);
+    var ink = opt.ink || '#3c352d';
+    var sw = opt.w === undefined ? 2 : opt.w;
+    return '<svg class="sk-border" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">' +
+      (opt.double === false ? '' :
+        '<path d="' + d + '" fill="none" stroke="' + ink + '" stroke-width="' + rr(sw * 1.9) +
+        '" stroke-linecap="round" opacity=".13" transform="translate(' + rr(opt.so || 1.1) + ',' + rr(opt.so || 1.1) + ')"/>') +
+      '<path d="' + d + '" fill="none" stroke="' + ink + '" stroke-width="' + sw + '" stroke-linecap="round"/>' +
+      '</svg>';
+  }
+
   return {
-    frogSVG: frogSVG, sceneSVG: sceneSVG, itemIcon: itemIcon,
-    rngFor: rngFor, hashStr: hashStr, FEATURES: FEATURES, POSES: POSES, PAL: PAL
+    sceneSVG: sceneSVG, itemIcon: itemIcon, bundleSVG: bundleSVG, sketchBox: sketchBox,
+    rngFor: rngFor, hashStr: hashStr, FEATURES: FEATURES, PAL: PAL
   };
 });

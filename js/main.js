@@ -1,163 +1,145 @@
 /* ============================================================
- * 旅行青蛙 · 启动 (js/main.js)
+ * 御风启程 · 启动 (js/main.js)
  * ------------------------------------------------------------
- * 单一职责：装配。把引擎挂上真实时钟与 localStorage，启动主循环，
- * 处理存活期（自动存盘 / 回到前台 / 离线追赶），再挂上可选输入：
- *   键盘（桌面调试）· 体感（智能戒指倾斜切页 / 手杖轻敲收草）· 语音（智能眼镜）
- * 参数：?fast=N 加速 N 倍（调试）；?reset=1 清档。
+ * 单一职责：装配。引擎挂真实时钟与存档；主循环 250ms 推引擎 tick +
+ * 每帧跑飞行动画（卷轴/滑翔物理）；存活期自动存盘；
+ * 输入策略：指针/键盘（ui 内部）+ 体感（戒指倾斜=滑翔俯仰，手杖轻敲=收草）。
+ * 参数：?fast=N 加速（调试）；?reset=1 清档。
  * ============================================================ */
 (function () {
   'use strict';
   var TF = window.TF;
 
-  /* ---------- 启动参数 ---------- */
   var qs = new URLSearchParams(location.search);
-  var TABS = ['home', 'shop', 'bag', 'album', 'stuff', 'log'];
   var timeScale = Math.max(1, Math.min(200, Number(qs.get('fast')) || 1));
   if (qs.get('reset') === '1') { try { localStorage.removeItem(TF.DATA.CONFIG.saveKey); } catch (e) {} }
 
-  /* ---------- 存档介质：优先 localStorage，被拒就退回内存（至少本次能玩） ---------- */
+  /* ---------- 存档介质：localStorage 被拒就退回内存 ---------- */
   function pickStorage() {
     try {
       var s = window.localStorage;
-      s.setItem('__tf_probe', '1');
-      s.removeItem('__tf_probe');
+      s.setItem('__wr_probe', '1');
+      s.removeItem('__wr_probe');
       return { storage: s, persistent: true };
     } catch (e) {
-      // 某些浏览器在 file:// / 无痕模式下会直接抛 SecurityError，不能让整个游戏跟着崩
       return { storage: TF.Engine.memStorage(), persistent: false };
     }
   }
   var picked = pickStorage();
 
-  /* ---------- 引擎：真实时钟 + 上面选定的存档介质 ---------- */
+  /* ---------- 引擎 ---------- */
   var engine = TF.Engine.createEngine({
-    now: function () { return Date.now(); },
-    storage: picked.storage,
-    config: { timeScale: timeScale }
+    now: function () { return Date.now() * timeScale; },
+    storage: picked.storage
   });
 
   /* ---------- 界面 ---------- */
   var UI = TF.UI.init(engine);
-  /* 深链：?tab=album 之类，方便截图 / 调试 / 从通知直接进某个页面 */
-  var startTab = qs.get('tab');
-  if (startTab && TABS.indexOf(startTab) >= 0) UI.showTab(startTab);
 
-  /* ---------- 主循环：250ms 推一格时间 + 刷新时间相关 UI ---------- */
-  var last = 0;
-  function loop() {
-    var now = Date.now();
-    if (now - last >= 250) {
-      last = now;
-      engine.tick(now);        // 到点的事件（归来 / 蜗牛 / 出发）会经事件回调刷新界面
-      UI.tick();               // 轻量：生长条 / 行程进度 / 倒计时
+  /* ---------- 主循环：250ms 引擎 tick + 每帧飞行动画 ---------- */
+  var lastTick = 0;
+  function loop(now) {
+    if (!now) now = Date.now();
+    if (now - lastTick >= 250) {
+      lastTick = now;
+      engine.tick(Date.now() * timeScale);
+      UI.tick();
     }
+    UI.flightFrame(now);
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
 
   /* ---------- 存活期 ---------- */
-  var AUTOSAVE_MS = 10000;
-  setInterval(function () { engine.save(); }, AUTOSAVE_MS);
-  /* 有实质变化就立刻落盘：不然刚收到明信片就被强杀，这次出行就白跑了 */
-  var SAVE_ON = { return: 1, depart: 1, harvest: 1, buy: 1, sell: 1, 'visitor-fed': 1, 'visitor-arrive': 1 };
+  setInterval(function () { engine.save(); }, 10000);
+  var SAVE_ON = { summoned: 1, departed: 1, 'glide-start': 1, 'glide-end': 1, landed: 1, settled: 1, harvest: 1, pick: 1 };
   engine.on(function (ev) { if (SAVE_ON[ev.type]) engine.save(); });
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) { engine.save(); return; }
-    engine.tick(Date.now());   // 回到前台：把离开期间的时间补上
-    if (UI.refresh) UI.refresh();
+    engine.tick(Date.now() * timeScale);
+    UI.refresh();
     UI.tick();
   });
   window.addEventListener('pagehide', function () { engine.save(); });
   window.addEventListener('beforeunload', function () { engine.save(); });
 
-  /* ---------- 键盘（桌面调试用） ---------- */
+  /* ---------- 键盘（桌面调试） ---------- */
   window.addEventListener('keydown', function (e) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    var i = TABS.indexOf(e.key);
-    if (i >= 0 || (e.key >= '1' && e.key <= '6')) { UI.showTab(TABS[(+e.key || i + 1) - 1]); return; }
+    if (e.key === '0' || e.key === 'Escape') { UI.closeSheet(); return; }
     if (e.key === 'h' || e.key === 'H') UI.harvestAll();
     if (e.key === 'f' || e.key === 'F') { engine.advance(5 * 60 * 1000); UI.refresh(); UI.toast('快进 5 分钟'); }
+    if (e.key === 'm' || e.key === 'M') { UI.openSheet('menu'); }
   });
 
-  /* ---------- 体感输入：智能戒指 / 手杖 ---------- */
+  /* ---------- 体感输入：戒指倾斜 = 滑翔俯仰；手杖轻敲 = 收草 ---------- */
   var Input = {
     enabled: false,
-    ringLastTilt: 0,
-    caneLastTap: 0,
+    ringLast: 0, caneLast: 0,
     supported: typeof window.DeviceOrientationEvent !== 'undefined' || typeof window.DeviceMotionEvent !== 'undefined',
     needsPermission: typeof window.DeviceOrientationEvent !== 'undefined' &&
       typeof window.DeviceOrientationEvent.requestPermission === 'function'
   };
-  function currentTab() {
-    var on = document.querySelector('.tab.on');
-    return on && on.dataset.tab ? on.dataset.tab : 'home';
-  }
   function onOrient(e) {
     if (!Input.enabled) return;
-    var gamma = e.gamma || 0;                       // 左右倾斜
-    var now = Date.now();
-    if (Math.abs(gamma) < 12 || now - Input.ringLastTilt < 600) return;
-    Input.ringLastTilt = now;
-    var idx = Math.max(0, TABS.indexOf(currentTab()));
-    var next = gamma > 0 ? (idx + 1) % TABS.length : (idx - 1 + TABS.length) % TABS.length;
-    UI.showTab(TABS[next]);
+    var v = engine.view();
+    if (!v.ride || v.ride.phase !== 'gliding') return;
+    var beta = e.beta || 0;                      // 前后倾斜：-90..90，前倾为负
+    UI.setPitch(-Math.max(-1, Math.min(1, (beta - 45) / 45)));
   }
   function onMotion(e) {
     if (!Input.enabled) return;
     var a = e.accelerationIncludingGravity || {};
     var mag = Math.sqrt((a.x || 0) ** 2 + (a.y || 0) ** 2 + (a.z || 0) ** 2);
     var now = Date.now();
-    if (mag < 18 || now - Input.caneLastTap < 1200) return;   // 手杖轻敲：猛地一颠
-    Input.caneLastTap = now;
+    if (mag < 18 || now - Input.caneLast < 1200) return;
+    Input.caneLast = now;
+    var v = engine.view();
+    if (v.ride && v.ride.phase === 'gliding') { UI.setPitch(-1); setTimeout(function () { UI.setPitch(0); }, 260); return; }
     UI.harvestAll();
   }
   function enableInput() {
     Input.enabled = true;
     window.addEventListener('deviceorientation', onOrient);
     window.addEventListener('devicemotion', onMotion);
-    UI.toast('体感已开启：倾斜（戒指）切页 · 轻敲（手杖）收草');
-    var b = document.getElementById('btn-motion');
-    if (b) { b.classList.add('on'); b.title = '体感已开启'; }
+    UI.toast('体感已开启：戒指倾斜=滑翔俯仰 · 手杖轻敲=收草');
   }
-  var motionBtn = document.getElementById('btn-motion');
-  if (Input.supported) {
-    motionBtn.classList.remove('hidden');
-    motionBtn.onclick = function () {
-      if (Input.needsPermission) {
-        Promise.all([
-          window.DeviceOrientationEvent.requestPermission(),
-          window.DeviceMotionEvent.requestPermission()
-        ]).then(function (rs) {
-          if (rs.every(function (r) { return r === 'granted'; })) enableInput();
-          else UI.toast('体感权限被拒绝了');
-        }).catch(function () { UI.toast('这台设备不支持体感'); });
-      } else {
-        enableInput();
-      }
-    };
-  }
+  Input.open = function () {
+    if (Input.enabled) { UI.toast('体感已经开着了'); return; }
+    if (Input.needsPermission) {
+      Promise.all([
+        window.DeviceOrientationEvent.requestPermission(),
+        window.DeviceMotionEvent.requestPermission()
+      ]).then(function (rs) {
+        if (rs.every(function (r) { return r === 'granted'; })) enableInput();
+        else UI.toast('体感权限被拒绝了');
+      }).catch(function () { UI.toast('这台设备不支持体感'); });
+    } else {
+      enableInput();
+    }
+  };
+  TF.Input = Input;
 
-  /* ---------- 调试出口（DevTools / 自动化验证用） ---------- */
+  /* ---------- 调试出口 ---------- */
   TF.game = engine;
   TF.debug = {
     engine: engine,
     advance: function (ms) { var e = engine.advance(ms); UI.refresh(); return e; },
-    fastForwardToReturn: function () {
-      var s = engine.state;
-      if (s.frog.state !== 'away') return null;
-      return TF.debug.advance(Math.max(0, s.frog.backAt - Date.now()) + 1000);
+    fastForwardToLanding: function () {
+      var v = engine.view();
+      if (!v.ride) return null;
+      if (v.ride.phase === 'flying' || v.ride.phase === 'gliding') return TF.debug.advance(Math.max(0, v.ride.backAt - v.t) + 1000);
+      if (v.ride.phase === 'summoning' || v.ride.phase === 'boarding') return TF.debug.advance(Math.max(0, v.ride.backAt - v.t) + 1000);
+      return null;
     },
-    tab: function (n) { UI.showTab(n); },
-    state: function () { return engine.view(); }
+    view: function () { return engine.view(); },
+    state: function () { return engine.view(); },
+    ui: UI
   };
 
-  /* ---------- 首次进入给一点点启动物资（免得干等着） ---------- */
   if (engine.isFresh) {
-    engine.state.clover = 20;
-    engine.state.log = [];
     engine.save();
-    UI.toast('先收三叶草，再去商店买便当吧');
+    UI.toast('摇铃召唤坐骑，和小鸡一起去旅行');
   }
   if (!picked.persistent) UI.toast('这个环境不让存档，本次进度关掉就没了');
 })();

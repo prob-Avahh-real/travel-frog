@@ -1,0 +1,96 @@
+/* ============================================================
+ * 御风启程 · 吉卜力晴空绘本 · 飞行层 (css/flight.css)
+ * ------------------------------------------------------------
+ * 天空分层、坐骑、滑翔道具，以及白胶囊 HUD / 奶油横幅。
+ * 暖黄强调 = 航迹进度（全 UI 第 2 处强调）。
+ * ============================================================ */
+
+/* ---------- 天空分层（背景平铺，x 方向无缝循环） ---------- */
+#sky-layers { position: absolute; inset: 0; pointer-events: none; }
+#sky-layers .lay {
+  position: absolute; left: -20px; right: -20px; top: -10px; bottom: -10px;
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+}
+.lay-bg { z-index: 0; }
+#lay-far { z-index: 1; }
+#lay-mid { z-index: 2; }
+#lay-near { z-index: 3; }
+
+/* ---------- 坐骑 ---------- */
+#mount-box {
+  position: absolute; left: 18%; top: 34%; width: 26%;
+  z-index: 5; cursor: pointer;
+  transition: transform .12s linear;
+}
+#mount-box .mount-svg { width: 100%; height: auto; display: block; }
+#mount-box.arriving {
+  left: 84%; top: 22%;
+  transition: left 2.4s ease-in-out, top 2.4s ease-in-out, width .2s;
+}
+#mount-box.arriving.landed { left: 44%; top: 20%; }
+
+/* ---------- 滑翔道具 + 浮游三叶草 ---------- */
+#flight-fx { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.fx-ring, .fx-cloud, .fx-thermal, .fx-wisp { position: absolute; transform: translate(-50%, -50%); }
+.fx-ring svg, .fx-cloud svg, .fx-thermal svg, .fx-wisp svg { width: 100%; height: auto; display: block; }
+.fx-ring { width: 8%; }
+.fx-thermal { opacity: .8; }
+.fx-wisp { width: 5.5%; pointer-events: auto; background: none; border: none; padding: 0; cursor: pointer;
+  animation: wisp-float 3s ease-in-out infinite alternate; }
+.fx-wisp.got, .fx-ring.got { opacity: 0; transition: opacity .3s; }
+@keyframes wisp-float { from { margin-top: -4px; } to { margin-top: 6px; } }
+
+/* ---------- HUD：浅轨 + 暖黄航迹（白胶囊） ---------- */
+#flight-hud {
+  position: absolute; top: 56px; left: 6%; right: 6%; z-index: 8;
+  display: flex; align-items: center; gap: 10px;
+}
+#flight-hud.hidden { display: none; }
+.fh-track {
+  flex: 1; height: 6px; position: relative; overflow: hidden;
+  background: rgba(46,58,51,.14); border: 1px solid rgba(46,58,51,.18); border-radius: 99px;
+  box-shadow: 0 1px 5px rgba(46,58,51,.12);
+}
+.fh-track i {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+  background: var(--accent);
+  border-radius: 99px; transition: width .3s linear;
+}
+.fh-dist {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(255,253,246,.95); border: 1px solid rgba(46,58,51,.12); border-radius: 999px;
+  padding: 3px 12px; box-shadow: 0 2px 10px rgba(46,58,51,.14);
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.fh-dist svg { width: 17px; height: 12px; flex: none; }
+.fh-hint {
+  font-size: 11.5px; font-weight: 600; color: var(--ink);
+  background: rgba(255,253,246,.95); border: 1px solid rgba(46,58,51,.12); border-radius: 999px;
+  padding: 4px 12px; box-shadow: 0 2px 10px rgba(46,58,51,.14);
+  animation: hint-float 1.8s ease-in-out infinite;
+}
+@keyframes hint-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+
+/* ---------- 相位横幅：白胶囊 ---------- */
+#phase-banner {
+  position: absolute; top: 21%; left: 50%; z-index: 9;
+  transform: translateX(-50%);
+  background: rgba(255,253,246,.96); border: 1px solid rgba(46,58,51,.12); border-radius: 999px;
+  padding: 9px 18px; font-size: 13px; font-weight: 700; color: var(--ink);
+  white-space: nowrap; max-width: 88%; text-align: center;
+  box-shadow: 0 4px 18px rgba(46,58,51,.16);
+}
+#phase-banner.pop { animation: banner-pop .3s ease-out; }
+@keyframes banner-pop { from { transform: translateX(-50%) scale(.9); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+/* ---------- 手表窄屏 ---------- */
+@media (max-width: 280px), (max-height: 300px) {
+  #mount-box { width: 30%; left: 22%; }
+  .fh-dist { font-size: 9.5px; padding: 2px 7px; }
+  .fh-dist svg { width: 13px; height: 9px; }
+  .fh-hint { font-size: 9px; padding: 3px 8px; }
+  #phase-banner { font-size: 10px; padding: 5px 10px; top: 18%; }
+  .fx-wisp { width: 7%; }
+  #lay-near, #lay-mid { opacity: .6; }
+}

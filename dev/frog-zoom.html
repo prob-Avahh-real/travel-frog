@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>青蛙放大（开发用）</title>
+<style>
+  body{margin:0;padding:16px;background:#f3ead3;font-family:system-ui,sans-serif}
+  .card{background:#fffdf6;border:2px solid #d6c7a4;border-radius:12px;display:inline-block;padding:10px}
+  .lbl{font-size:11px;font-weight:700;color:#4a3f2f;margin-top:6px;text-align:center}
+  #box{width:420px;height:420px;display:grid;place-items:center;background:#efe4c8;border-radius:8px}
+  #s{width:420px;height:420px}
+</style>
+</head>
+<body>
+<div class="card"><div id="box"><svg id="s" viewBox="-56 -64 112 116" width="420" height="420"></svg></div><div class="lbl" id="lbl"></div></div>
+<script src="../js/data.js"></script>
+<script src="../js/scene.js"></script>
+<script src="../js/art.js"></script>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var angle = q.get('angle') || '0', pose = q.get('pose') || 'sit';
+  document.getElementById('s').innerHTML = TF.Scene.frogFigure(pose, angle === '0' ? undefined : { style: angle });
+  document.getElementById('lbl').textContent = (angle === '0' ? '0° 侧视（现用）' : angle + '°') + ' · ' + pose;
+})();
+</script>
+</body>
+</html>
