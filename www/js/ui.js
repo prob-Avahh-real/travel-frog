@@ -1,10 +1,12 @@
 /* ============================================================
- * 旅行青蛙 · 界面 (js/ui.js)
+ * 御风启程 · 界面 (js/ui.js)
  * ------------------------------------------------------------
- * 单一职责：把引擎的只读视图渲染成 DOM，并把点击翻译成引擎动作。
- * 不含游戏规则（规则全在 engine.js），不直接写 localStorage（在 engine.js）。
- * 性能策略：每个屏幕各自记一个「签名」，签名没变就不重建 DOM；
- * 时间相关的进度（生长条 / 行程条 / 倒计时）走轻量 lightTick。
+ * 单一职责：把引擎只读视图渲染成 DOM，把点击/拖动翻译成引擎动作。
+ * 不含游戏规则（规则全在 engine.js）。两个画面模式：
+ *   home   —— 出发台（树冠平台 + 三叶草畦 + 铃铛）
+ *   flight —— 天空分层卷轴（自动巡航观看 / 滑翔段可操控）
+ * 相位切换由引擎 tick 驱动，UI 只读相位；滑翔物理在 UI 帧循环里算，
+ * 撞圈/撞云只回引擎记数，不推相位。新增输入设备 = 往 setPitch 喂值。
  * ============================================================ */
 (function (root, factory) {
   root.TF = root.TF || {};
@@ -12,68 +14,61 @@
 })(typeof window !== 'undefined' ? window : this, function (TF) {
   'use strict';
 
-  var D = TF.DATA, Art = TF.Art;
-  var eng = null, el = {};
-  var ui = { tab: 'home', shopKind: 'food', bagFood: null, bagItems: [], frogPose: null };
-  var sig = {};                       // 每个屏幕的签名缓存
-
-  /* ---------------- 小工具 ---------------- */
+  var D = TF.DATA, W = TF.World, Sc = TF.Scene;
+  var eng = null;
+  var ui = {
+    mode: 'home',              // home | flight
+    fx: { scrollX: 0, scrollSpeed: 0, glide: null, wisps: [], lastT: 0 },
+    mountBox: null, lastPhase: null, bannerTimer: 0
+  };
+  var sig = {};
   function $(id) { return document.getElementById(id); }
-  function pad(n) { return (n < 10 ? '0' : '') + n; }
-  function fmtDur(ms) {
-    var s = Math.max(0, Math.round(ms / 1000));
-    if (s < 60) return s + ' 秒';
-    var m = Math.round(s / 60);
-    if (m < 60) return m + ' 分钟';
-    return Math.round(m / 60 * 10) / 10 + ' 小时';
-  }
-  function clk(ts) { var d = new Date(ts); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
-  function ago(ts) {
-    var s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-    if (s < 60) return '刚刚';
-    if (s < 3600) return Math.round(s / 60) + ' 分钟前';
-    return Math.round(s / 3600) + ' 小时前';
-  }
-  var TIME_NAME = { dawn: '清晨', day: '白天', dusk: '黄昏', night: '夜里' };
-  var DIST_NAME = { near: '近郊', mid: '中程', far: '远行', exotic: '秘境' };
-  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
-  /* 签名：变了才重建 DOM */
+  function esc(s) { return String(s).replace(/[&<>\"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
   function changed(key, s) { if (sig[key] === s) return false; sig[key] = s; return true; }
   function invalidate() { sig = {}; }
 
-  /* ---------------- Toast / 弹窗 ---------------- */
-  var MAX_TOASTS = 3;                 // 同屏最多留几条，多了会糊住整个画面
+  /* ---------------- 纸片提示（沿用：合并 + 上限） ---------------- */
+  var MAX_SLIPS = 2;
   function toast(msg) {
-    var host = $('toasts');
+    var host = $('slips');
+    if (!host) return;
     var same = null;
-    Array.prototype.forEach.call(host.children, function (n) {
-      if (n.dataset.msg === msg) same = n;
-    });
-    if (same) {                       // 同一条消息连续出现 → 合并成 ×N，而不是叠一摞
+    Array.prototype.forEach.call(host.children, function (n) { if (n.dataset.msg === msg) same = n; });
+    if (same) {
       same.dataset.n = String((+same.dataset.n || 1) + 1);
       same.textContent = msg + ' ×' + same.dataset.n;
       clearTimeout(+same.dataset.timer);
-      same.dataset.timer = String(setTimeout(function () { same.classList.add('out'); setTimeout(function () { same.remove(); }, 320); }, 1900));
+      same.dataset.timer = String(setTimeout(function () { fade(same); }, 1900));
       return;
     }
-    while (host.children.length >= MAX_TOASTS) host.removeChild(host.firstChild);
+    while (host.children.length >= MAX_SLIPS) host.removeChild(host.firstChild);
     var t = document.createElement('div');
-    t.className = 'toast'; t.textContent = msg; t.dataset.msg = msg; t.dataset.n = '1';
+    t.className = 'slip'; t.textContent = msg; t.dataset.msg = msg; t.dataset.n = '1';
     host.appendChild(t);
-    t.dataset.timer = String(setTimeout(function () { t.classList.add('out'); setTimeout(function () { t.remove(); }, 320); }, 1900));
+    t.dataset.timer = String(setTimeout(function () { fade(t); }, 1900));
   }
-  function openModal(opts) {
+  function fade(node) {
+    node.classList.add('out');
+    setTimeout(function () { if (node.parentNode) node.remove(); }, 320);
+  }
+
+  /* ---------------- 弹窗 ---------------- */
+  function openModalRaw(html) {
     var box = $('modal-box');
-    var html = '<div class="m-head"><span>' + esc(opts.title || '') + '</span>' +
-      '<button class="hud-btn" data-m="close">✕</button></div>' +
-      '<div class="m-body">' + (opts.body || '') + '</div>';
-    if (opts.buttons && opts.buttons.length) {
-      html += '<div class="m-foot">' + opts.buttons.map(function (b, i) {
-        return '<button class="' + (b.cls || 'm-ghost') + '" data-m="btn" data-i="' + i + '">' + esc(b.label) + '</button>';
-      }).join('') + '</div>';
-    }
     box.innerHTML = html;
     $('modal').classList.remove('hidden');
+    return box;
+  }
+  function openModal(opts) {
+    var box = openModalRaw(
+      '<div class="m-head"><span>' + esc(opts.title || '') + '</span>' +
+      '<button class="m-close" data-m="close">✕</button></div>' +
+      '<div class="m-body">' + (opts.body || '') + '</div>' +
+      (opts.buttons && opts.buttons.length
+        ? '<div class="m-foot">' + opts.buttons.map(function (b, i) {
+          return '<button class="' + (b.cls || 'm-ghost') + '" data-m="btn" data-i="' + i + '">' + esc(b.label) + '</button>';
+        }).join('') + '</div>'
+        : ''));
     box.querySelector('[data-m="close"]').onclick = closeModal;
     box.querySelectorAll('[data-m="btn"]').forEach(function (b) {
       b.onclick = function () {
@@ -85,504 +80,509 @@
   }
   function closeModal() { $('modal').classList.add('hidden'); $('modal-box').innerHTML = ''; }
 
-  /* ---------------- 顶栏 ---------------- */
-  function renderHud() {
-    var v = eng.view();
-    $('num-clover').textContent = v.clover;
-    $('num-fourleaf').textContent = v.fourLeaf;
-    $('hud-title').textContent = v.title;
-    $('album-badge').textContent = v.album.length ? String(v.album.length) : '';
+  /* ---------------- 家模式 ---------------- */
+  function timeOfDay(t) {
+    var h = new Date(t).getHours();
+    return h >= 19 || h < 5 ? 'night' : 'day';   // MVP：白天/夜行两档（19–5 夜，含凌晨）
   }
 
-  /* ---------------- 家 ---------------- */
-  var POSES = { idle: 'walk', read: 'read', write: 'write', whittle: 'whittle', eat: 'eat', nap: 'nap' };
-  var ACT_NAME = {};
-  D.ACTIVITIES.forEach(function (a) { ACT_NAME[a.id] = a.name; });
-
-  function gardenHTML() {
-    var sprout = '<svg viewBox="0 0 24 24" class="sprout"><path d="M12 22 V13" stroke="#6fb04a" stroke-width="2" fill="none"/>' +
-      '<path d="M12 15 q -8 -2 -8 -8 q 8 0 8 8 Z" fill="#8fcf62"/>' +
-      '<path d="M12 15 q 8 -2 8 -8 q -8 0 -8 8 Z" fill="#7cbb50"/></svg>';
-    var s = '';
-    for (var i = 0; i < eng.config.garden.plots; i++) {
-      s += '<button class="plot" data-plot="' + i + '">' +
-        Art.itemIcon('clover', 'clover', 24) + sprout + '<i class="prog"></i></button>';
-    }
-    return s;
-  }
-
-  function renderHome(force) {
-    var v = eng.view();
-    var key = 'home|' + v.frog.state + '|' + v.frog.activity + '|' + v.visitor.state + '|' +
-      JSON.stringify(v.packed) + '|' + v.ripeCount + '|' + v.fourLeaf + '|' +
-      v.log.length + '#' + (v.log[0] ? v.log[0].at : 0);
+  function renderHome(v, force) {
+    var key = 'home|' + v.ride + '|' + JSON.stringify(v.patch) + '|' + v.clovers + '|' + v.cooldownLeft;
     if (force || changed('home', key)) {
-      // 青蛙立绘
-      var pose = v.frog.state === 'away' ? null : (POSES[v.frog.activity] || 'idle');
-      if (pose !== ui.frogPose) {
-        ui.frogPose = pose;
-        $('frog-host').innerHTML = pose ? Art.frogSVG(pose) : '';
-      }
-      $('frog-host').className = 'frog-host' + (pose ? ' walking' : ' away');
-      var b = $('frog-bubble');
-      if (pose) { b.textContent = ACT_NAME[v.frog.activity] || '发呆'; b.classList.remove('hidden'); }
-      else b.classList.add('hidden');
-
-      // 行囊条
-      var strip = $('bag-strip');
-      if (v.packed.food) {
-        var food = D.FOOD_BY_ID[v.packed.food];
-        strip.innerHTML = '<div class="bag-slot filled">' + Art.itemIcon('food', food.id, 22) + esc(food.name) + '</div>' +
-          v.packed.items.map(function (id) {
-            var it = D.ITEM_BY_ID[id];
-            return '<div class="bag-slot filled">' + Art.itemIcon('item', id, 22) + esc(it ? it.name : id) + '</div>';
-          }).join('') + '<div class="grow"></div><span class="mini-btn" id="go-bag">准备出行</span>';
+      var night = timeOfDay(v.t);
+      $('scene').innerHTML = W.launchScene(night, v.patch.map(function (p) { return p.ripe; }));
+      /* 热区：三叶草畦 + 铃铛（坐标来源 = world.LAUNCH_HOTSPOTS） */
+      var H = W.LAUNCH_HOTSPOTS;
+      var hits = v.patch.map(function (p, i) {
+        var x = H.patch.x - H.patch.w / 2 + 8 + i * 15;
+        return '<button class="hit' + (p.ripe ? ' ripe' : '') + '" data-patch="' + i +
+          '" style="left:' + (x / 320 * 100).toFixed(2) + '%;top:' + ((H.patch.y - 12) / 700 * 100).toFixed(2) +
+          '%;width:9%;height:8%" aria-label="三叶草 ' + (i + 1) + '"></button>';
+      }).join('');
+      var bellReady = !v.ride && !v.cooldownLeft;
+      hits += '<button class="hit hit-bell' + (bellReady ? ' ready' : '') + '" data-bell="1" ' +
+        'style="left:' + ((H.bell.x - H.bell.w / 2) / 320 * 100).toFixed(2) + '%;top:' + ((H.bell.y - H.bell.h / 2) / 700 * 100).toFixed(2) +
+        '%;width:11%;height:20%" aria-label="摇铃召唤坐骑"></button>';
+      $('scene-hits').innerHTML = hits;
+      /* 坐骑飞入（召唤阶段）——只在 home 模式管 mount-box，飞行模式由 enterFlight 管 */
+      var mb = $('mount-box');
+      if (ui.mode !== 'home') { /* 不动 */ }
+      else if (v.ride && (v.ride.phase === 'summoning' || v.ride.phase === 'boarding')) {
+        mb.classList.remove('hidden');
+        mb.classList.add('arriving');
+        mb.innerHTML = W.mountSVG(v.ride.mountId, false);
+        if (v.ride.phase === 'boarding') mb.classList.add('landed');
+      } else if (v.ride) {
+        mb.classList.add('hidden');
       } else {
-        strip.innerHTML = '<div class="grow"><div class="bag-empty">行囊空着 —— 先给青蛙准备一个便当吧</div></div>' +
-          '<button class="mini-btn" id="go-bag">准备行囊</button>';
-      }
-      var gb = $('go-bag');
-      if (gb) gb.onclick = function () { showTab('bag'); };
-
-      // 蜗牛
-      $('visitor-spot').classList.toggle('hidden', v.visitor.state !== 'waiting');
-      $('visitor-banner').classList.toggle('hidden', v.visitor.state !== 'waiting');
-      $('garden').innerHTML = gardenHTML();
-      // 首页动态：填掉房间下方那块空白，顺手把「刚才发生了什么」告诉玩家
-      $('home-log').innerHTML = v.log.length
-        ? v.log.slice(0, 3).map(function (l) {
-          return '<div class="log-item"><time>' + clk(l.at) + '</time><span>' + esc(l.text) + '</span></div>';
-        }).join('')
-        : '<div class="empty" style="padding:8px 0">还很安静。</div>';
-    }
-    updateTimeUI();
-  }
-
-  /* 只随时间变化的东西：田地进度 / 行程进度 / 倒计时 */
-  function updateTimeUI() {
-    var v = eng.view();
-    // 田地
-    var plots = $('garden').children;
-    for (var i = 0; i < plots.length; i++) {
-      var p = v.plots[i]; if (!p) continue;
-      var node = plots[i];
-      if (p.ripe) { node.classList.add('ripe'); node.querySelector('.prog').style.width = '0'; }
-      else {
-        node.classList.remove('ripe');
-        node.querySelector('.prog').style.width = Math.round(Math.max(0, Math.min(1, p.progress)) * 100) + '%';
+        mb.classList.add('hidden');
       }
     }
-    // 行程
-    var aw = $('away-panel');
-    if (v.frog.state === 'away' || v.frog.state === 'departing') {
-      aw.classList.remove('hidden');
-      if (v.frog.state === 'departing') {
-        $('away-text').textContent = '青蛙在收拾行李……';
-        $('away-sub').textContent = '它马上就出门了';
-        $('away-fill').style.width = '4%';
-      } else {
-        var t = v.frog.trip;
-        var total = v.frog.backAt - t.departAt, done = v.t - t.departAt;
-        var pct = Math.max(0, Math.min(1, done / total));
-        $('away-text').textContent = '青蛙带着「' + t.foodName + '」出门了';
-        $('away-sub').innerHTML = '已经走了 ' + fmtDur(done) + '　·　预计还要 ' + fmtDur(v.frog.backAt - v.t) + '<br>' +
-          '<span style="opacity:.7">' + (pct < .3 ? '还在附近转悠…' : pct < .7 ? '应该走了挺远了…' : '快到家了…') + '</span>';
-        $('away-fill').style.width = Math.round(pct * 100) + '%';
-      }
-    } else {
-      aw.classList.add('hidden');
-    }
-    renderHud();
+    $('num-clover').textContent = v.clovers;
+    var bell = $('btn-bell');
+    bell.classList.toggle('hidden', !(!v.ride && !v.cooldownLeft));
   }
 
-  /* ---------------- 商店 ---------------- */
-  function locationNamesRequiring(itemId) {
-    return D.LOCATIONS.filter(function (l) { return (l.requires || []).indexOf(itemId) >= 0; })
-      .map(function (l) { return l.name; });
+  /* ---------------- 飞行模式 ---------------- */
+  var skyCache = {};
+  /* data URI：必须加引号——SVG 里 url(#fsky) 的括号不会被 encodeURIComponent 编码，
+     裸 url() 记号会被数据里的第一个 ) 提前掐断，Chrome 整个丢弃声明 */
+  function dataUri(svg) {
+    return 'url("data:image/svg+xml,' + encodeURIComponent(svg).replace(/'/g, '%27') + '")';
   }
-  function renderShop() {
-    var v = eng.view();
-    var kind = ui.shopKind;
-    var table = kind === 'food' ? D.FOODS : D.ITEMS;
-    var key = 'shop|' + kind + '|' + v.clover + '|' + JSON.stringify(kind === 'food' ? v.pantry : v.items) + '|' + v.fourLeaf;
-    if (!changed('shop', key)) return;
-
-    $('shop-hint').textContent = kind === 'food'
-      ? '便当决定青蛙走多远、走多久。越贵的便当，越可能带回稀有的明信片。'
-      : '道具在出发时消耗，会推远行程、提高遇上好风景的概率，或打开某些只认道具的地方。';
-
-    $('shop-list').innerHTML = table.map(function (it) {
-      var own = kind === 'food' ? (v.pantry[it.id] || 0) : (v.items[it.id] || 0);
-      var can = v.clover >= it.price && !it.loot;
-      var extra = '';
-      if (kind === 'food') extra = '<span class="tag d-' + it.dist + '">' + DIST_NAME[it.dist] + '</span>';
-      else {
-        var gates = locationNamesRequiring(it.id);
-        if (gates.length) extra = '<span class="tag">开：' + esc(gates.join('·')) + '</span>';
-      }
-      return '<div class="row">' + Art.itemIcon(kind, it.id, 34) +
-        '<div class="info"><div class="name">' + esc(it.name) + extra + '</div>' +
-        '<div class="desc">' + esc(it.desc) + (own ? '　已有 ' + own + ' 个' : '') + '</div></div>' +
-        '<div class="act"><span class="price' + (can ? '' : ' no') + '">🍀 ' + it.price + '</span>' +
-        (it.loot ? '<span class="own">不可购买</span>'
-          : '<button class="buy" data-buy="' + kind + ':' + it.id + '"' + (can ? '' : ' disabled') + '>买</button>') +
-        '</div></div>';
-    }).join('');
-  }
-
-  /* ---------------- 行囊 ---------------- */
-  function renderBag() {
-    var v = eng.view();
-    var foods = Object.keys(v.pantry).filter(function (id) { return v.pantry[id] > 0 && D.FOOD_BY_ID[id]; });
-    var items = Object.keys(v.items).filter(function (id) { return v.items[id] > 0 && D.ITEM_BY_ID[id]; });
-    if (v.fourLeaf > 0) items.push('fourleaf');
-    var key = 'bag|' + JSON.stringify(foods) + '|' + JSON.stringify(items) + '|' + ui.bagFood + '|' + ui.bagItems.join(',');
-    if (!changed('bag', key)) return;
-
-    // 便当
-    $('bag-food').innerHTML = foods.length ? foods.map(function (id) {
-      var f = D.FOOD_BY_ID[id];
-      return '<div class="row' + (ui.bagFood === id ? ' picked' : '') + '" data-pick-food="' + id + '">' +
-        Art.itemIcon('food', id, 34) +
-        '<div class="info"><div class="name">' + esc(f.name) +
-        '<span class="tag d-' + f.dist + '">' + DIST_NAME[f.dist] + '</span>' +
-        '<span class="tag">约 ' + fmtDur(f.minMs) + '~' + fmtDur(f.maxMs) + '</span></div>' +
-        '<div class="desc">' + esc(f.desc) + '</div></div>' +
-        '<div class="act"><span class="own">×' + v.pantry[id] + '</span></div></div>';
-    }).join('') : '<div class="empty">还没有便当。<br>去「商店」买一个吧。</div>';
-
-    // 道具
-    $('bag-item').innerHTML = items.length ? items.map(function (id) {
-      var it = D.ITEM_BY_ID[id];
-      var on = ui.bagItems.indexOf(id) >= 0;
-      var stock = id === 'fourleaf' ? v.fourLeaf : v.items[id];
-      return '<div class="row' + (on ? ' picked' : '') + '" data-pick-item="' + id + '">' +
-        Art.itemIcon('item', id, 30) +
-        '<div class="info"><div class="name">' + esc(it.name) + '</div>' +
-        '<div class="desc">' + esc(it.desc) + '</div></div>' +
-        '<div class="act"><span class="own">×' + stock + '</span></div></div>';
-    }).join('') : '<div class="empty">没有道具。<br>道具能让青蛙走得更远、看得更多。</div>';
-
-    // 预览
-    var pv = ui.bagFood ? eng.previewTrip(ui.bagFood, ui.bagItems) : null;
-    if (pv) {
-      $('bag-preview').innerHTML = '预计 ' + fmtDur(pv.durationMin) + ' ~ ' + fmtDur(pv.durationMax) +
-        '　·　' + (pv.guarantee ? '<b>必得稀有以上</b>' : '好照片概率 +' + Math.round(pv.rareBonus * 100) + '%') +
-        '<br>可能去到：' + esc(pv.reachable.map(function (l) { return l.name; }).join('、'));
-    } else {
-      $('bag-preview').innerHTML = '选一个便当吧（道具可选，最多 3 件）';
-    }
-    $('btn-depart').disabled = !ui.bagFood;
-    $('btn-depart').textContent = ui.bagFood ? '让青蛙出发' : '先选便当';
-  }
-
-  /* ---------------- 图鉴 ---------------- */
-  function cardHTML(card, big) {
-    var loc = D.LOC_BY_ID[card.locId];
-    return '<div class="card r-' + card.rarity + (big ? '' : '') + '">' +
-      '<span class="badge">' + D.RARITY[card.rarity].name + '</span>' +
-      '<div class="photo">' + Art.sceneSVG(loc ? loc.scene : 'field', card.time, card.sceneId) + '</div>' +
-      '<div class="cap">' + esc(card.caption) + '</div>' +
-      '<div class="meta"><span>' + esc(loc ? loc.name : '?') + ' · ' + TIME_NAME[card.time] + '</span><span>' + ago(card.at) + '</span></div></div>';
-  }
-  function renderAlbum() {
-    var v = eng.view();
-    var key = 'album|' + v.album.length + '|' + v.album.map(function (c) { return c.id; }).join(',');
-    if (!changed('album', key)) return;
-    var got = {};
-    v.album.forEach(function (c) { got[c.sceneId] = c; });
-    var total = 0, have = 0, html = '';
-    // 已收集的（新的在前）
-    v.album.slice().reverse().forEach(function (c) {
-      html += '<div class="card-wrap" data-card="' + c.id + '">' + cardHTML(c) + '</div>';
-    });
-    // 未收集的按地点列出
-    var locked = '';
-    D.LOCATIONS.forEach(function (l) {
-      l.scenes.forEach(function (s) {
-        total++;
-        var sid = l.id + ':' + s[0] + ':' + s[1];
-        if (got[sid]) { have++; return; }
-        locked += '<div class="card locked"><div class="photo">🔒</div>' +
-          '<div class="cap">还没去过的地方…</div>' +
-          '<div class="meta"><span>' + esc(l.name) + '</span><span>?</span></div></div>';
+  function enterFlight(v) {
+    ui.mode = 'flight';
+    $('scene').classList.add('hidden');
+    $('sky-layers').classList.remove('hidden');
+    $('mount-box').classList.remove('hidden');
+    $('mount-box').classList.remove('arriving', 'landed');
+    var mountId = v.ride.mountId;
+    if (!skyCache[mountId]) {
+      var L = W.skyLayers(mountId);
+      skyCache[mountId] = {};
+      ['bg', 'far', 'mid', 'near'].forEach(function (k) {
+        skyCache[mountId][k] = dataUri(L[k]);
       });
-    });
-    $('album-grid').innerHTML =
-      '<div class="empty" style="padding:4px 0 8px">已收集 ' + have + ' / ' + total + ' 张明信片　·　' + esc(v.title) + '</div>' +
-      (html || '<div class="empty">还没有明信片。<br>给青蛙准备行囊，让它出门吧。</div>') +
-      (locked ? '<div class="empty" style="padding:10px 0 4px">— 尚未拍到 —</div>' + locked : '');
+    }
+    var C = skyCache[mountId];
+    $('lay-bg').style.backgroundImage = C.bg;
+    $('lay-far').style.backgroundImage = C.far;
+    $('lay-mid').style.backgroundImage = C.mid;
+    $('lay-near').style.backgroundImage = C.near;
+    $('sky-layers').dataset.mount = mountId;    // jsdom 读不回 data:image 的 style，留一个可断言的数据标记
+    $('mount-box').innerHTML = W.mountSVG(mountId, D.MOUNT_BY_ID[mountId].dayNight === 'night');
+    ui.fx.scrollX = 0;
+    ui.fx.scrollSpeed = D.CONFIG.skySpeed * (D.MOUNT_BY_ID[mountId].speed || 1);
+    ui.fx.wisps = [];
+    ui.fx.glide = null;
+    banner('起飞啦！' + (D.MOUNT_BY_ID[mountId] ? D.MOUNT_BY_ID[mountId].name : '') + '载着小鸡出发');
+  }
+  function exitFlight() {
+    ui.mode = 'home';
+    $('scene').classList.remove('hidden');
+    $('sky-layers').classList.add('hidden');
+    $('mount-box').classList.add('hidden');
+    $('flight-hud').classList.add('hidden');
+    $('flight-fx').innerHTML = '';
+    $('phase-banner').classList.add('hidden');
+    ui.fx.glide = null;
+    ui.fx.wisps = [];
+    invalidate();
   }
 
-  /* ---------------- 特产 ---------------- */
-  function stuffInfo(sid) {
-    var locId = sid.split(':')[0], name = sid.split(':')[1];
-    var loc = D.LOC_BY_ID[locId];
-    var val = 0, rar = 'common';
-    if (loc) loc.souvenirs.forEach(function (s) { if (s[0] === name) { val = s[1]; rar = s[2]; } });
-    return { locId: locId, name: name, locName: loc ? loc.name : '?', value: val, rarity: rar };
+  function banner(text) {
+    var b = $('phase-banner');
+    b.textContent = text;
+    b.classList.remove('hidden');
+    b.classList.remove('pop');
+    void b.offsetWidth;
+    b.classList.add('pop');
+    clearTimeout(ui.bannerTimer);
+    ui.bannerTimer = setTimeout(function () { b.classList.add('hidden'); }, 2600);
   }
-  function renderStuff() {
+
+  function startGlide() {
+    var g = {
+      y: 0, vy: 0, pitch: 0,
+      rings: [], clouds: [], thermals: [],
+      collected: 0, lastT: performance.now(),
+      cloudSlowUntil: 0
+    };
+    /* 生成一圈道具：从右往左排开（屏幕坐标用百分比 x，y 居中偏上） */
+    var n = D.GLIDE.rings;
+    for (var i = 0; i < n; i++) {
+      g.rings.push({ x: 92 + i * 26 + Math.random() * 8, y: 18 + Math.random() * 40, hit: false });
+    }
+    for (i = 0; i < 4; i++) {
+      g.clouds.push({ x: 110 + i * 34 + Math.random() * 14, y: 12 + Math.random() * 56, w: 13, h: 9 });
+    }
+    for (i = 0; i < 3; i++) {
+      g.thermals.push({ x: 100 + i * 38 + Math.random() * 12, y: 40 + Math.random() * 30, w: 9, h: 16 });
+    }
+    ui.fx.glide = g;
+    renderGlideFX();
+    banner('滑翔段！拖动屏幕上下——乘气流、穿光圈、躲乌云');
+  }
+  function renderGlideFX() {
+    var g = ui.fx.glide;
+    var host = $('flight-fx');
+    var html = '';
+    g.rings.forEach(function (r, i) {
+      if (r.hit) return;
+      html += '<div class="fx-ring" data-ring="' + i + '" style="left:' + r.x.toFixed(1) + '%;top:' + r.y.toFixed(1) + '%">' + W.ringSVG() + '</div>';
+    });
+    g.clouds.forEach(function (c, i) {
+      html += '<div class="fx-cloud" data-cloud="' + i + '" style="left:' + c.x.toFixed(1) + '%;top:' + c.y.toFixed(1) + '%;width:' + c.w + '%;">' + W.stormCloudSVG() + '</div>';
+    });
+    g.thermals.forEach(function (t, i) {
+      html += '<div class="fx-thermal" data-thermal="' + i + '" style="left:' + t.x.toFixed(1) + '%;top:' + t.y.toFixed(1) + '%;width:' + t.w + '%;">' + W.thermalSVG() + '</div>';
+    });
+    host.innerHTML = html;
+  }
+
+  /* ---------------- 飞行帧（rAF）：卷轴 + 滑翔物理 + 碰撞 ---------------- */
+  var MOUNT_X = 26;   // 坐骑屏幕位置（%，从左上）
+  function flightFrame(now) {
     var v = eng.view();
-    var ids = Object.keys(v.souvenirs).filter(function (k) { return v.souvenirs[k] > 0; });
-    var key = 'stuff|' + JSON.stringify(v.souvenirs) + '|' + v.visitor.state;
-    if (!changed('stuff', key)) return;
-    if (!ids.length) {
-      $('stuff-list').innerHTML = '<div class="empty">还没有特产。<br>青蛙出门回来时，会给你带一些。</div>';
+    var r = v.ride;
+    if (!r || (r.phase !== 'flying' && r.phase !== 'gliding')) return;
+    var fx = ui.fx;
+    var dt = Math.min(64, now - (fx.lastT || now));
+    fx.lastT = now;
+    var mount = D.MOUNT_BY_ID[r.mountId];
+    var speed = fx.scrollSpeed;
+
+    if (r.phase === 'gliding' && !fx.glide) startGlide();
+    var g = fx.glide;
+
+    /* 滑翔物理 */
+    if (g) {
+      var slowed = now < g.cloudSlowUntil;
+      if (slowed) speed *= D.GLIDE.cloudSlow;
+      g.vy += g.pitch * 900 * (dt / 1000);
+      g.vy *= Math.pow(0.996, dt / 16.7);
+      g.y += g.vy * (dt / 1000);
+      g.y = Math.max(-30, Math.min(30, g.y));
+      /* 热区判定（坐骑位置 vs 道具位置） */
+      var H = window.innerHeight || 600;
+      var mx = MOUNT_X + 9, my = 34 + g.y * 0.16;    // 坐骑中心（%）
+      g.thermals.forEach(function (t) {
+        if (Math.abs(t.x - mx) < t.w && Math.abs(t.y - my) < t.h * 0.6) g.vy -= 34 * (dt / 1000) * (mount.glideLift || 1);
+      });
+      g.clouds.forEach(function (c) {
+        if (Math.abs(c.x - mx) < c.w * 0.8 && Math.abs(c.y - my) < c.h * 0.9) {
+          if (!c.hit) { c.hit = true; g.cloudSlowUntil = now + 900; eng.cloudHit(); toast('撞进乌云里了'); }
+        }
+      });
+      g.rings.forEach(function (rg) {
+        if (!rg.hit && Math.abs(rg.x - mx) < 4.5 && Math.abs(rg.y - my) < 4.5) {
+          rg.hit = true; g.collected++;
+          var res = eng.glideRing();
+          var node = document.querySelector('[data-ring="' + g.rings.indexOf(rg) + '"]');
+          if (node) node.classList.add('got');
+          toast('光圈 +1 三叶草');
+          if (g.rings.every(function (x) { return x.hit; })) banner('光圈全收！');
+        }
+      });
+    }
+
+    /* 卷轴推进（百分比取模：不依赖层的像素宽，容器任意尺寸都对） */
+    fx.scrollX = (fx.scrollX + speed * dt / 1000) % 640;
+    var shX = (-fx.scrollX / 640 * 100) + '%';
+    $('lay-far').style.backgroundPositionX = shX;
+    $('lay-mid').style.backgroundPositionX = shX;
+    $('lay-near').style.backgroundPositionX = shX;
+
+    /* 坐骑颠簸 + 滑翔位姿 */
+    var bob = Math.sin(now / 300) * (mount.bobbing || 3);
+    var tilt = g ? -g.pitch * 6 : Math.sin(now / 260) * 2;
+    var yOff = g ? g.y * (window.innerHeight || 600) / 220 : bob;
+    $('mount-box').style.transform = 'translateY(' + (yOff * 0.9).toFixed(1) + 'px) rotate(' + tilt.toFixed(1) + 'deg)';
+
+    /* 浮游三叶草：自动段生成 + 漂移 + 点击收 */
+    if (!g && Math.random() < dt / 2600) {
+      fx.wisps.push({ x: 96, y: 12 + Math.random() * 60, id: 'w' + Math.random().toString(36).slice(2) });
+      var wh = $('flight-fx');
+      if (wh && fx.wisps.length < 8) {
+        wh.insertAdjacentHTML('beforeend', '<button class="fx-wisp" data-wisp="' + fx.wisps[fx.wisps.length - 1].id +
+          '" style="left:96%;top:' + fx.wisps[fx.wisps.length - 1].y.toFixed(1) + '%">' + W.wispSVG() + '</button>');
+      }
+    }
+    fx.wisps.forEach(function (wp) {
+      wp.x -= speed * dt / 1000 / 6.4;   // 屏幕宽的百分比
+      var node = document.querySelector('[data-wisp="' + wp.id + '"]');
+      if (wp.x < -10) {
+        if (node) node.remove();
+        fx.wisps.splice(fx.wisps.indexOf(wp), 1);
+      } else if (node) {
+        node.style.left = wp.x + '%';
+      }
+    });
+
+    /* HUD */
+    var prog = $('flight-prog');
+    if (prog) prog.style.width = Math.round((r.progress || 0) * 100) + '%';
+    var dist = Math.round((v.t - r.departAt) * 0.02 * (mount.speed || 1));
+    $('flight-dist').textContent = dist + ' 米';
+  }
+
+  /* ---------------- 主渲染：按相位切模式 ---------------- */
+  function render(force) {
+    var v = eng.view();
+    var r = v.ride;
+    var inFlight = r && (r.phase === 'flying' || r.phase === 'gliding');
+    if (inFlight && ui.mode !== 'flight') enterFlight(v);
+    if (!inFlight && ui.mode !== 'home') exitFlight();
+
+    if (r && r.phase === 'landed' && !sig.settleShown) {
+      sig.settleShown = true;
+      showSettle(v, r);
+    }
+    if (!r) sig.settleShown = false;
+
+    if (ui.mode === 'home') {
+      renderHome(v, force);
+      /* 滑翔提示牌只在家里/飞行 HUD 出现 */
+      $('flight-hud').classList.add('hidden');
+    } else {
+      renderHome(v, force);   // 计数片也要更新
+      $('flight-hud').classList.remove('hidden');
+      var g = ui.fx.glide;
+      $('glide-hint').classList.toggle('hidden', !(r.phase === 'gliding'));
+      if (r.phase !== 'gliding' && g) { ui.fx.glide = null; $('flight-fx').innerHTML = ''; }
+    }
+    guideRender();
+  }
+
+  /* ---------------- 结算卡 ---------------- */
+  function showSettle(v, r) {
+    var l = r.loot || eng.previewLoot(r, v.t);
+    var dest = D.DEST_BY_ID[r.destId] || {};
+    var mount = D.MOUNT_BY_ID[r.mountId] || {};
+    var row = function (label, val) {
+      return '<div class="kv-row"><span>' + label + '</span><b>' + val + '</b></div>';
+    };
+    openModal({
+      title: '抵达「' + esc(dest.name || '?') + '」',
+      body: '<div class="settle-card">' + W.settleCardSVG(r.destId, r.mountId) + '</div>' +
+        '<div class="kv">' +
+        row('飞行', l.meters + ' 米') +
+        row('里程', '+' + l.distClovers) +
+        row('光圈', '+' + l.ringClovers) +
+        row('顺手摘', '+' + l.autoPick) +
+        '</div>' +
+        '<div class="memento">纪念品 · ' + esc(l.memento || '—') + '</div>',
+      buttons: [{ label: '收下', cls: 'm-primary', onClick: function () { eng.settle(); refresh(); } }]
+    });
+  }
+
+  /* ---------------- 新手引导（状态推导，跳过存档） ---------------- */
+  var GUIDE_STEPS = {
+    summon: { tip: '摇一摇铃铛，坐骑会飞过来接小鸡', target: '[data-bell]' },
+    board: { tip: '坐骑落地了 —— 点它一下，登机出发', target: '#mount-box' },
+    glide: { tip: '滑翔段！按住屏幕上下拖动，穿越光圈', target: null }
+  };
+  function onboardStep(v) {
+    if (v.onboarded || v.tripCount > 0) return null;
+    if (!v.ride) return 'summon';
+    if (v.ride.phase === 'summoning' || v.ride.phase === 'boarding') return 'board';
+    if (v.ride.phase === 'gliding') return 'glide';
+    return null;
+  }
+  function guideRender() {
+    var v = eng.view();
+    var step = onboardStep(v);
+    var g = $('guide');
+    if (!step) { g.classList.add('hidden'); return; }
+    var def = GUIDE_STEPS[step];
+    $('guide-tip').textContent = def.tip;
+    g.classList.remove('hidden');
+    var target = def.target ? document.querySelector(def.target) : null;
+    var ring = $('guide-ring');
+    if (!target) { ring.style.display = 'none'; return; }
+    ring.style.display = '';
+    var r = target.getBoundingClientRect();
+    ring.style.left = Math.round(r.left + r.width / 2) + 'px';
+    ring.style.top = Math.round(r.top + r.height / 2) + 'px';
+  }
+  function guideOff() { $('guide').classList.add('hidden'); }
+
+  /* ---------------- 操作 ---------------- */
+  function tapBell() {
+    var v = eng.view();
+    if (v.ride) return toast('已经有坐骑了');
+    var res = eng.summon();
+    if (!res.ok) {
+      if (res.reason === 'cooldown') toast('刚飞回来，坐骑要歇会儿（' + Math.ceil(v.cooldownLeft / 1000) + ' 秒）');
       return;
     }
-    ids.sort(function (a, b) { return stuffInfo(b).value - stuffInfo(a).value; });
-    $('stuff-list').innerHTML = ids.map(function (sid) {
-      var s = stuffInfo(sid), n = v.souvenirs[sid];
-      var feeding = v.visitor.state === 'waiting';
-      return '<div class="row"><div style="width:30px;text-align:center;font-size:20px">' +
-        (s.rarity === 'epic' ? '💎' : s.rarity === 'rare' ? '🎁' : '🎀') + '</div>' +
-        '<div class="info"><div class="name">' + esc(s.name) +
-        '<span class="tag">' + esc(s.locName) + '</span>' +
-        '<span class="tag d-' + (s.rarity === 'epic' ? 'exotic' : s.rarity === 'rare' ? 'mid' : 'near') + '">' + D.RARITY[s.rarity].name + '</span></div>' +
-        '<div class="desc">持有 ×' + n + '</div></div>' +
-        '<div class="act"><span class="price">🍀 ' + s.value + '</span>' +
-        (feeding ? '<button class="buy" data-feed="' + esc(sid) + '">喂蜗牛</button>' : '') +
-        '<button class="buy" style="background:#b8a67e;box-shadow:0 2px 0 #94835f" data-sell="' + esc(sid) + '">卖</button>' +
-        '</div></div>';
-    }).join('');
+    toast('铃铛响了……');
+    refresh();
   }
-
-  /* ---------------- 日记 ---------------- */
-  function renderLog() {
+  function tapMount() {
     var v = eng.view();
-    var key = 'log|' + v.log.length + '|' + (v.log[0] ? v.log[0].at : 0);
-    if (!changed('log', key)) return;
-    $('log-list').innerHTML = v.log.length ? v.log.map(function (l) {
-      return '<div class="log-item"><time>' + clk(l.at) + '</time><span>' + esc(l.text) + '</span></div>';
-    }).join('') : '<div class="empty">还很安静。<br>做点什么，这里就会热闹起来。</div>';
+    var r = v.ride;
+    if (!r) return;
+    if (r.phase === 'boarding') {
+      var res = eng.board();
+      if (res.ok) {
+        if (!eng.view().onboarded) eng.markOnboarded();
+        toast('起飞！');
+        refresh();
+      }
+    }
+  }
+  function tapPatch(i) {
+    var res = eng.harvestPatch(i);
+    if (res.ok) toast('三叶草 +1');
+    else if (res.reason === 'not-ripe') toast('还没长好，再等等');
+    refresh();
+  }
+  function tapWisp(id) {
+    var res = eng.collectAutoPick();
+    if (res.ok) {
+      var node = document.querySelector('[data-wisp="' + id + '"]');
+      if (node) { node.classList.add('got'); setTimeout(function () { node.remove(); }, 300); }
+      var ws = ui.fx.wisps;
+      for (var i = 0; i < ws.length; i++) if (ws[i].id === id) { ws.splice(i, 1); break; }
+      toast('摘到浮游三叶草');
+    }
   }
 
-  /* ---------------- 屏幕调度 ---------------- */
-  var RENDERERS = { home: renderHome, shop: renderShop, bag: renderBag, album: renderAlbum, stuff: renderStuff, log: renderLog };
-  function showTab(name) {
-    ui.tab = name;
-    document.querySelectorAll('.screen').forEach(function (s) {
-      s.classList.toggle('hidden', s.dataset.screen !== name);
-    });
-    document.querySelectorAll('.tab').forEach(function (t) {
-      t.classList.toggle('on', t.dataset.tab === name);
-    });
-    var r = RENDERERS[name];
-    if (r) r(true);
+  /* 滑翔操控：外部输入（指针/键盘/体感）都走这一个口 */
+  function setPitch(v) {
+    if (ui.fx.glide) ui.fx.glide.pitch = Math.max(-1, Math.min(1, v));
   }
-  function refresh() { invalidate(); var r = RENDERERS[ui.tab]; if (r) r(true); renderHud(); updateTimeUI(); }
-
-  /* ---------------- 一键收割（收 + 汇总提示，压住逐株提示） ---------------- */
-  var bulkHarvest = false;
   function harvestAll() {
-    var n;
-    bulkHarvest = true;
-    try { n = eng.harvestAll(); } finally { bulkHarvest = false; }
-    if (n.count) toast('收了三叶草 ×' + n.count + (n.fourLeaf ? '，还有四叶草 ×' + n.fourLeaf + '！' : ''));
+    var n = eng.harvestAll();
+    if (n.got) toast('收了三叶草 ×' + n.got);
     else toast('还没有长好的三叶草');
-    return n;
+    refresh();
   }
 
-  /* ---------------- 引擎事件 → 提示 / 弹窗 ---------------- */
+  /* ---------------- 引擎事件 ---------------- */
   function bindEngine() {
     eng.on(function (ev) {
-      if (ev.type === 'return') {
-        var t = ev.trip;
-        var body = '<div class="postcard-view"><div class="photo">' +
-          Art.sceneSVG((D.LOC_BY_ID[t.locId] || {}).scene || 'field', t.postcard.time, t.postcard.sceneId) + '</div>' +
-          '<div class="cap">' + esc(t.postcard.caption) + '</div>' +
-          '<div style="text-align:center;margin-top:6px"><span class="stamp">' + D.RARITY[t.postcard.rarity].name + '</span></div></div>' +
-          '<div class="kv"><span>📍 ' + esc(t.locName) + '</span><span>🕒 ' + TIME_NAME[t.postcard.time] + '</span>' +
-          '<span>🍀 +' + t.clover + '</span></div>' +
-          '<div style="margin-top:9px">带回的特产：' + t.souvenirs.map(function (s) { return esc(s.name); }).join('、') + '</div>';
-        openModal({ title: '明信片到了', body: body, buttons: [{ label: '收下', cls: 'm-primary' }] });
+      if (ev.type === 'summoned') {
+        refresh();
+      } else if (ev.type === 'departed') {
+        refresh();
+      } else if (ev.type === 'glide-start') {
+        if (ui.mode === 'flight') startGlide();
+      } else if (ev.type === 'glide-end') {
+        ui.fx.glide = null;
+        $('flight-fx').innerHTML = '';
+      } else if (ev.type === 'landed') {
+        refresh();
+      } else if (ev.type === 'settled') {
         refresh();
       } else if (ev.type === 'harvest') {
-        if (!bulkHarvest) toast(ev.fourLeaf ? '收割：三叶草 +1，捡到四叶草！🍀🍀🍀🍀' : '三叶草 +1');
-        refresh();
-      } else if (ev.type === 'depart') {
-        toast('青蛙出发了 · 目的地是秘密');
-        refresh();
-      } else if (ev.type === 'departing') {
-        refresh();
-      } else if (ev.type === 'visitor-arrive') {
-        toast('蜗牛来门口等你了 🐌');
-        refresh();
-      } else if (ev.type === 'visitor-left') {
-        toast('蜗牛等不到东西，走了');
-        refresh();
-      } else if (ev.type === 'visitor-fed') {
-        toast('蜗牛回礼：三叶草 +' + ev.clover + (ev.gift ? '，还留下一件道具' : ''));
-        refresh();
-      } else if (ev.type === 'buy' || ev.type === 'sell' || ev.type === 'unpack') {
         refresh();
       }
     });
   }
 
-  /* ---------------- 点击：事件委托 ---------------- */
-  function bindClicks() {
-    // 标签
-    $('tabs').addEventListener('click', function (e) {
-      var t = e.target.closest('.tab'); if (!t) return;
-      showTab(t.dataset.tab);
-    });
-    // 田地
-    $('garden').addEventListener('click', function (e) {
-      var p = e.target.closest('[data-plot]'); if (!p) return;
-      var got = eng.harvest(+p.dataset.plot);
-      if (!got) toast('这株还没长好，再等等');
-    });
-    $('btn-harvest-all').onclick = harvestAll;
-    $('go-log').onclick = function () { showTab('log'); };
-    // 商店
-    $('shop-seg').addEventListener('click', function (e) {
-      var b = e.target.closest('.seg-btn'); if (!b) return;
-      ui.shopKind = b.dataset.kind;
-      document.querySelectorAll('#shop-seg .seg-btn').forEach(function (x) { x.classList.toggle('on', x === b); });
-      invalidate(); renderShop();
-    });
-    $('shop-list').addEventListener('click', function (e) {
-      var b = e.target.closest('[data-buy]'); if (!b) return;
-      var parts = b.dataset.buy.split(':');
-      if (eng.buy(parts[0], parts[1])) toast('买好了');
-      else toast('三叶草不够');
-    });
-    // 行囊
-    $('bag-food').addEventListener('click', function (e) {
-      var r = e.target.closest('[data-pick-food]'); if (!r) return;
-      var id = r.dataset.pickFood;
-      ui.bagFood = ui.bagFood === id ? null : id;
-      invalidate(); renderBag();
-    });
-    $('bag-item').addEventListener('click', function (e) {
-      var r = e.target.closest('[data-pick-item]'); if (!r) return;
-      var id = r.dataset.pickItem;
-      var i = ui.bagItems.indexOf(id);
-      if (i >= 0) ui.bagItems.splice(i, 1);
-      else if (ui.bagItems.length >= 3) { toast('行囊最多塞 3 件道具'); return; }
-      else ui.bagItems.push(id);
-      invalidate(); renderBag();
-    });
-    $('btn-depart').onclick = function () {
-      if (!ui.bagFood) return;
-      if (!eng.pack(ui.bagFood, ui.bagItems)) return toast('库存不足');
-      if (!eng.depart()) return toast('青蛙现在不能出门');
-      ui.bagFood = null; ui.bagItems = [];
-      invalidate();
-      showTab('home');
-      toast('青蛙开始收拾行李…');
-    };
-    // 图鉴
-    $('album-grid').addEventListener('click', function (e) {
-      var w = e.target.closest('[data-card]');
-      if (!w) { toast('这部分还没拍到'); return; }
-      var c = eng.view().album.filter(function (x) { return x.id === w.dataset.card; })[0];
-      if (!c) return;
-      var loc = D.LOC_BY_ID[c.locId];
-      openModal({
-        title: loc ? loc.name + ' · ' + TIME_NAME[c.time] : '明信片',
-        body: '<div class="postcard-view"><div class="photo">' +
-          Art.sceneSVG(loc ? loc.scene : 'field', c.time, c.sceneId) + '</div>' +
-          '<div class="cap">' + esc(c.caption) + '</div>' +
-          '<div style="text-align:center;margin-top:6px"><span class="stamp">' + D.RARITY[c.rarity].name + '</span></div></div>' +
-          '<div class="kv"><span>第 ' + (c.tripIndex + 1) + ' 次旅行</span><span>' + ago(c.at) + '</span></div>',
-        buttons: [{ label: '合上相册', cls: 'm-primary' }]
-      });
-    });
-    // 特产
-    $('stuff-list').addEventListener('click', function (e) {
-      var s = e.target.closest('[data-sell]');
-      if (s) {
-        var g = eng.sellSouvenir(s.dataset.sell, 1);
-        return g ? toast('卖了，三叶草 +' + g) : toast('卖不出去');
-      }
-      var f = e.target.closest('[data-feed]');
-      if (f) {
-        var r = eng.feedVisitor(f.dataset.feed);
-        if (!r) toast('蜗牛已经走了');
-        return;
-      }
-    });
-    // 蜗牛
-    $('visitor-spot').onclick = function () {
-      if (eng.view().visitor.state !== 'waiting') return;
-      var ids = Object.keys(eng.view().souvenirs).filter(function (k) { return eng.view().souvenirs[k] > 0; });
-      if (!ids.length) { toast('还没有特产可以喂它'); showTab('stuff'); return; }
-      showTab('stuff');
-      toast('挑一件特产喂它吧');
-    };
-    // 弹窗遮罩
-    $('modal').addEventListener('click', function (e) {
-      if (e.target.id === 'modal') closeModal();
-    });
-    // 快进（调试用）
-    $('btn-speed').onclick = function () {
-      var evs = eng.advance(5 * 60 * 1000);
-      toast('快进 5 分钟');
-      if (!evs.some(function (e) { return e.type === 'return'; })) refresh();
-    };
-    // 菜单
-    $('btn-menu').onclick = function () {
-      var v = eng.view();
-      openModal({
-        title: '关于与设置',
-        body: '<div style="line-height:1.8">' +
-          '<b>称号：</b>' + esc(v.title) + '<br>' +
-          '<b>明信片：</b>' + v.album.length + ' 张<br>' +
-          '<b>出行次数：</b>' + v.stats.trips + ' 次　<b>喂过蜗牛：</b>' + v.stats.fed + ' 次<br>' +
-          '<b>三叶草田：</b>' + eng.config.garden.plots + ' 格（约 ' + fmtDur(eng.config.garden.growMs) + ' 长一轮）<br><br>' +
-          '<span style="opacity:.75">存档保存在本机，关掉再打开会按真实时间继续（青蛙可能已经回来了）。<br>' +
-          '⏩ 按钮可以快进 5 分钟，方便测试。</span></div>',
-        buttons: [
-          { label: '重开一局', cls: 'm-ghost', onClick: function () { confirmReset(); return false; } },
-          { label: '好', cls: 'm-primary' }
-        ]
-      });
-    };
+  /* ---------------- 菜单 ---------------- */
+  function renderMenu(force) {
+    var v = eng.view();
+    var key = 'menu|' + v.tripCount + '|' + v.mementos.join(',') + '|' + v.clovers;
+    if (!force && !changed('menu', key)) return;
+    $('menu-status').innerHTML =
+      '<div class="kv-row"><span>旅程</span><b>' + v.tripCount + ' 次</b></div>' +
+      '<div class="kv-row"><span>三叶草</span><b>' + v.clovers + '</b></div>' +
+      '<div class="kv-row"><span>纪念品</span><b>' + (v.mementos.length ? v.mementos.join(' · ') : '还没有') + '</b></div>' +
+      '<div class="hint-line">存档在本机，关掉再打开会按真实时间继续。三叶草在出发台长，摇铃召唤坐骑出发。</div>' +
+      '<div class="menu-btns">' +
+      '<button class="mini" id="btn-motion">开启体感</button>' +
+      '<button class="mini" id="btn-reset">重开一局</button>' +
+      '</div>';
+    var rb = $('btn-reset');
+    if (rb) rb.onclick = confirmReset;
+    var mb = $('btn-motion');
+    if (mb) {
+      if (!(TF.Input && TF.Input.supported)) mb.style.display = 'none';
+      else mb.onclick = function () { TF.Input.open(); };
+    }
   }
+  function openSheet(name) {
+    ui.sheet = name;
+    $('sheet-menu').classList.toggle('hidden', name !== 'menu');
+    if (name === 'menu') renderMenu(true);
+    guideRender();
+  }
+  function closeSheet() { ui.sheet = null; $('sheet-menu').classList.add('hidden'); }
+
   function confirmReset() {
     openModal({
       title: '确认重开一局？',
-      body: '会清空三叶草、行囊、明信片册和特产，无法撤销。',
+      body: '会清空三叶草、纪念品和旅程记录，无法撤销。',
       buttons: [
         { label: '再想想', cls: 'm-ghost' },
-        { label: '清空重开', cls: 'm-primary', onClick: function () { eng.reset(); ui.bagFood = null; ui.bagItems = []; invalidate(); refresh(); toast('重新开始了'); } }
+        { label: '清空重开', cls: 'm-primary', onClick: function () {
+          try { localStorage.removeItem(D.CONFIG.saveKey); } catch (e) {}
+          location.reload();
+        } }
       ]
     });
   }
 
-  /* ---------------- 房间窗外的天色（跟着真实时间走） ---------------- */
-  function applySky() {
-    var h = new Date().getHours();
-    var cls = (h >= 5 && h < 8) ? 'dawn' : (h >= 8 && h < 17) ? '' : (h >= 17 && h < 19.5) ? 'dusk' : 'night';
-    var w = $('win-sky');
-    w.className = 'win-sky' + (cls ? ' ' + cls : '');
-  }
+  function refresh() { invalidate(); render(true); }
 
   /* ---------------- 入口 ---------------- */
   function init(engine) {
     eng = engine;
-    el = {};
     bindEngine();
     bindClicks();
-    applySky();
-    renderHud();
-    showTab('home');
-    // 启动时的离线结算提示
-    var evs = eng.catchUpEvents || [];
-    var back = evs.filter(function (e) { return e.type === 'return'; });
-    if (back.length) toast('青蛙在你离开的时候回来了');
-    return { refresh: refresh, tick: updateTimeUI, showTab: showTab, toast: toast, openModal: openModal, ui: ui };
+    bindFlightInput();
+    $('btn-menu').onclick = function () { openSheet('menu'); };
+    $('guide-skip').onclick = function () { eng.markOnboarded(); guideOff(); };
+    document.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = closeSheet; });
+    render(true);
+    window.addEventListener('resize', function () { invalidate(); render(true); }, { passive: true });
+    return { refresh: refresh, tick: tick, flightFrame: flightFrame, toast: toast, setPitch: setPitch, guideOff: guideOff, ui: ui };
+  }
+
+  function bindClicks() {
+    $('scene-hits').addEventListener('click', function (e) {
+      var p = e.target.closest('[data-patch]');
+      if (p) return tapPatch(+p.dataset.patch);
+      var b = e.target.closest('[data-bell]');
+      if (b) return tapBell();
+    });
+    $('btn-bell').onclick = tapBell;
+    $('mount-box').addEventListener('click', tapMount);
+    $('flight-fx').addEventListener('click', function (e) {
+      var w = e.target.closest('[data-wisp]');
+      if (w) tapWisp(w.dataset.wisp);
+    });
+  }
+
+  /* ---------------- 飞行输入策略表：指针拖动 / 方向键；体感走 setPitch ---------------- */
+  function bindFlightInput() {
+    var dragging = false;
+    $('stage').addEventListener('pointerdown', function (e) {
+      var v = eng.view();
+      if (!v.ride || v.ride.phase !== 'gliding') return;
+      dragging = true;
+      ui.fx.glide && (ui.fx.glide.pointerY = e.clientY);
+    });
+    window.addEventListener('pointermove', function (e) {
+      if (!dragging || !ui.fx.glide) return;
+      var dy = (ui.fx.glide.pointerY - e.clientY);
+      ui.fx.glide.pointerY = e.clientY;
+      var H = window.innerHeight || 600;
+      ui.fx.glide.pitch = Math.max(-1, Math.min(1, dy / (H * 0.25)));
+    });
+    window.addEventListener('pointerup', function () { dragging = false; });
+    window.addEventListener('keydown', function (e) {
+      var v = eng.view();
+      if (!v.ride || v.ride.phase !== 'gliding') return;
+      if (e.key === 'ArrowUp') { setPitch(-1); e.preventDefault(); }
+      else if (e.key === 'ArrowDown') { setPitch(1); e.preventDefault(); }
+    });
+    window.addEventListener('keyup', function (e) {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') setPitch(0);
+    });
+  }
+
+  /* ---------------- 轻量 tick（250ms，从 main 调）：只更新计数/进度 ---------------- */
+  function tick() {
+    var v = eng.view();
+    $('num-clover').textContent = v.clovers;
+    render(false);
   }
 
   return {
     init: init,
+    tick: tick,
+    flightFrame: flightFrame,
+    setPitch: setPitch,
     harvestAll: harvestAll,
-    // 供 main.js 的轻量循环使用
-    tick: function () { updateTimeUI(); },
-    // 供测试/调试
-    _internal: { fmtDur: fmtDur, stuffInfo: stuffInfo, applySky: applySky }
+    openSheet: openSheet,
+    closeSheet: closeSheet,
+    guideOff: guideOff,
+    refresh: refresh,
+    toast: toast,
+    ui: ui
   };
 });

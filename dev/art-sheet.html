@@ -26,6 +26,7 @@
 <div class="note">开发用（不进 App 包）。用来检查每个地点 × 时段的风景、青蛙全部姿态、以及图标是否画得出来、长得顺眼。</div>
 <div id="out"></div>
 <script src="../js/data.js"></script>
+<script src="../js/scene.js"></script>
 <script src="../js/art.js"></script>
 <script>
 (function () {
@@ -46,8 +47,8 @@
 
   /* 青蛙姿态 */
   html += '<h2>青蛙：全部姿态</h2><div class="grid poses">';
-  Object.keys(Art.POSES).forEach(function (p) {
-    html += '<div class="cell"><div class="box">' + Art.frogSVG(p) + '</div><div class="lbl">' + p + '</div></div>';
+  Object.keys(TF.Scene.POSES).forEach(function (p) {
+    html += '<div class="cell"><div class="box"><svg viewBox="-40 -52 80 94">' + TF.Scene.frogFigure(p) + '</svg></div><div class="lbl">' + p + '</div></div>';
   });
   html += '</div>';
 

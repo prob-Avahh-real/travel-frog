@@ -5,136 +5,90 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#e8dcc0">
-<title>旅行青蛙 · 旅かえる</title>
+<meta name="theme-color" content="#8fd0ef">
+<title>御风启程</title>
 <link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/flight.css">
 </head>
 <body>
+<!-- 新手引导：摇铃 → 登机 → 滑翔。从状态推导、可跳过（跳过写档） -->
+<div class="guide hidden" id="guide">
+  <div class="guide-dim"></div>
+  <div class="guide-ring" id="guide-ring"></div>
+  <div class="guide-slip" id="guide-slip">
+    <span id="guide-tip"></span>
+    <button class="guide-skip" id="guide-skip" aria-label="跳过新手引导">跳过</button>
+  </div>
+</div>
 <div id="app">
 
-  <!-- ========== 顶部状态 ========== -->
-  <header id="hud">
-    <div class="hud-group">
-      <span class="chip" id="chip-clover" title="三叶草"><span class="ico" id="ico-clover"></span><b id="num-clover">0</b></span>
-      <span class="chip" id="chip-fourleaf" title="四叶草（出门必得好照片）"><span class="ico" id="ico-fourleaf"></span><b id="num-fourleaf">0</b></span>
+  <!-- ===================== 满屏场景 ===================== -->
+  <div id="stage">
+    <div id="scene-wrap">
+      <div id="scene"></div>
+      <div id="sky-layers" class="hidden">
+        <div class="lay lay-bg" id="lay-bg"></div>
+        <div class="lay" id="lay-far"></div>
+        <div class="lay" id="lay-mid"></div>
+        <div class="lay" id="lay-near"></div>
+      </div>
+      <div id="mount-box" class="hidden"></div>
+      <div id="flight-fx"></div>
+      <div id="scene-hits"></div>
     </div>
-    <div class="hud-title" id="hud-title">独自旅行的青蛙</div>
-    <div class="hud-group">
-      <button class="hud-btn hidden" id="btn-motion" title="开启体感（智能戒指 / 手杖）">⌚</button>
-      <button class="hud-btn" id="btn-speed" title="快进（测试用）">⏩</button>
-      <button class="hud-btn" id="btn-menu" title="更多">⋯</button>
+
+    <!-- 顶部：三叶草计数片 + 摇铃 + 菜单 -->
+    <div class="hud-top">
+      <div class="chip-clover">
+        <span class="leaf-ico" id="ico-clover"></span>
+        <b id="num-clover">0</b>
+      </div>
+      <button class="bell-btn hidden" id="btn-bell" title="摇铃召唤坐骑" aria-label="摇铃召唤坐骑">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 a6 6 0 0 1 6 6 c0 3 1.5 4 2 5.5 H4 c .5 -1.5 2 -2.5 2 -5.5 a6 6 0 0 1 6 -6 Z"/>
+          <path d="M10 19 a2.5 2.5 0 0 0 4 0"/>
+        </svg>
+      </button>
+      <div class="hud-spacer"></div>
+      <button class="chip-menu" id="btn-menu" title="菜单" aria-label="菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M5 8 h14 M5 12 h14 M5 16 h10"/>
+        </svg>
+      </button>
     </div>
-  </header>
 
-  <!-- ========== 主舞台 ========== -->
-  <main id="stage">
-    <section class="screen" data-screen="home" id="screen-home">
-      <div class="room" id="room">
-        <div class="wall">
-          <div class="window" id="room-window">
-            <div class="win-sky" id="win-sky"></div>
-            <div class="win-hill"></div>
-            <div class="win-pane"></div>
-          </div>
-          <div class="picture"><div class="pic-inner"></div></div>
-          <div class="shelf">
-            <span class="book b1"></span><span class="book b2"></span><span class="book b3"></span>
-            <span class="jar"></span>
-          </div>
-          <div class="lamp-hang"></div>
-        </div>
-        <div class="floor">
-          <div class="rug"></div>
-          <div class="bed"><div class="bed-blanket"></div><div class="bed-pillow"></div></div>
-          <div class="desk"><div class="desk-top"></div><div class="desk-leg l"></div><div class="desk-leg r"></div></div>
-          <div class="frog-host" id="frog-host"></div>
-          <div class="bubble hidden" id="frog-bubble">发呆</div>
-          <div class="visitor-spot hidden" id="visitor-spot" title="点它喂点特产">
-            <div class="snail"><div class="snail-shell"></div><div class="snail-body"></div><div class="snail-eye l"></div><div class="snail-eye r"></div></div>
-            <span class="v-label">点我</span>
-          </div>
-        </div>
-        <div class="away-panel hidden" id="away-panel">
-          <div class="away-inner">
-            <div class="away-emoji">🎒</div>
-            <div class="away-text" id="away-text"></div>
-            <div class="away-bar"><i id="away-fill"></i></div>
-            <div class="away-sub" id="away-sub"></div>
-          </div>
-        </div>
+    <!-- 飞行 HUD：航迹仪（航线 + 风矢标里程） -->
+    <div id="flight-hud" class="hidden">
+      <div class="fh-track"><i id="flight-prog"></i></div>
+      <div class="fh-dist">
+        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M2 12 V2 M2 2 L8 5 M2 7 L6 9"/>
+        </svg>
+        <span id="flight-dist">0 米</span>
       </div>
+      <div class="fh-hint hidden" id="glide-hint">按住上下拖动</div>
+    </div>
 
-      <div class="strip">
-        <div class="strip-head">
-          <span>三叶草田</span>
-          <button class="mini-btn" id="btn-harvest-all">一键收割</button>
-        </div>
-        <div class="garden" id="garden"></div>
-      </div>
+    <!-- 相位横幅 -->
+    <div id="phase-banner" class="hidden"></div>
+  </div>
 
-      <div class="strip bag-strip" id="bag-strip"></div>
-
-      <div class="strip">
-        <div class="strip-head"><span>最近动态</span><button class="mini-btn" id="go-log">全部</button></div>
-        <div class="log" id="home-log"></div>
-      </div>
-    </section>
-
-    <section class="screen hidden" data-screen="shop" id="screen-shop">
-      <div class="seg" id="shop-seg">
-        <button class="seg-btn on" data-kind="food">便当</button>
-        <button class="seg-btn" data-kind="item">道具</button>
-      </div>
-      <p class="hint" id="shop-hint"></p>
-      <div class="list" id="shop-list"></div>
-    </section>
-
-    <section class="screen hidden" data-screen="bag" id="screen-bag">
-      <p class="hint">给青蛙准备一个便当（+ 最多 3 件道具）。便当越贵，走得越远、回来得越少。</p>
-      <h3 class="sec">便当</h3>
-      <div class="list" id="bag-food"></div>
-      <h3 class="sec">道具 <small>（出发时消耗）</small></h3>
-      <div class="list grid" id="bag-item"></div>
-      <div class="bag-foot">
-        <div class="bag-preview" id="bag-preview"></div>
-        <button class="primary" id="btn-depart" disabled>出发</button>
-      </div>
-    </section>
-
-    <section class="screen hidden" data-screen="album" id="screen-album">
-      <p class="hint">明信片册：青蛙每回来一次都会带回一张照片。</p>
-      <div class="album" id="album-grid"></div>
-    </section>
-
-    <section class="screen hidden" data-screen="stuff" id="screen-stuff">
-      <p class="hint">特产可以卖掉换三叶草，也可以喂门口来的蜗牛换回礼。</p>
-      <div class="list" id="stuff-list"></div>
-    </section>
-
-    <section class="screen hidden" data-screen="log" id="screen-log">
-      <p class="hint">青蛙的日常记录。</p>
-      <div class="log" id="log-list"></div>
-    </section>
-  </main>
-
-  <!-- ========== 底部标签 ========== -->
-  <nav id="tabs">
-    <button class="tab on" data-tab="home"><span>🏠</span>家</button>
-    <button class="tab" data-tab="shop"><span>🏪</span>商店</button>
-    <button class="tab" data-tab="bag"><span>🎒</span>行囊</button>
-    <button class="tab" data-tab="album"><span>📮</span>图鉴<em id="album-badge"></em></button>
-    <button class="tab" data-tab="stuff"><span>🧺</span>特产</button>
-    <button class="tab" data-tab="log"><span>📓</span>日记</button>
-  </nav>
+  <!-- ===================== 菜单面板 ===================== -->
+  <section class="sheet sheet-menu hidden" id="sheet-menu">
+    <button class="back-btn" data-close="1">返回</button>
+    <h2 class="sheet-title">菜单</h2>
+    <div class="menu-card" id="menu-status"></div>
+  </section>
 </div>
 
-<div id="toasts"></div>
-<div id="visitor-banner" class="hidden">🐌 蜗牛来门口等你了 —— 点它喂点特产</div>
+<div id="slips"></div>
 <div id="modal" class="hidden"><div class="modal-box" id="modal-box"></div></div>
 
 <script src="js/data.js"></script>
 <script src="js/engine.js"></script>
+<script src="js/scene.js"></script>
 <script src="js/art.js"></script>
+<script src="js/world.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>
 </body>

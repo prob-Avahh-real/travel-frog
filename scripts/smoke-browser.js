@@ -14,6 +14,8 @@
  *   node scripts/smoke-browser.js                      # 手机视口，跑断言
  *   node scripts/smoke-browser.js --tab=album --shot /tmp/a.png
  *   node scripts/smoke-browser.js --viewport=watch     # 手表窄屏
+ *   node scripts/smoke-browser.js --views=/tmp/v       # 连拍 7 个视图（人眼复核用）
+ *     视图步骤约定：数字 = 等多少毫秒；'#选择器' = 等它出现且可点再点；'!选择器' = 等它消失；'?表达式' = 求值并打印
  * ============================================================ */
 const http = require('http');
 const fs = require('fs');
@@ -173,75 +175,101 @@ async function main() {
       const probe = await client.send('Runtime.evaluate', {
         returnByValue: true,
         expression: `JSON.stringify({
-          frog: !!document.querySelector('#frog-host svg'),
-          plots: document.querySelectorAll('#garden .plot').length,
-          ripe: document.querySelectorAll('#garden .plot.ripe').length,
+          hasScene: !!document.querySelector('#scene svg.scene-svg'),
+          rider: !!document.querySelector('#scene .rider'),
+          patches: document.querySelectorAll('#scene-hits .hit[data-patch]').length,
+          ripeHits: document.querySelectorAll('#scene-hits .hit.ripe').length,
+          bell: !!document.querySelector('#scene-hits .hit-bell'),
           clover: document.getElementById('num-clover').textContent,
-          title: document.getElementById('hud-title').textContent,
+          dock: document.querySelectorAll('.dock-btn').length,
           tabs: document.querySelectorAll('.tab').length,
-          visibleScreen: (document.querySelector('.screen:not(.hidden)')||{}).dataset ? document.querySelector('.screen:not(.hidden)').dataset.screen : null,
+          skyHidden: document.getElementById('sky-layers').classList.contains('hidden'),
+          mountHidden: document.getElementById('mount-box').classList.contains('hidden'),
+          guideShown: !document.getElementById('guide').classList.contains('hidden'),
+          guideTip: document.getElementById('guide-tip').textContent,
           docW: document.documentElement.scrollWidth,
           winW: window.innerWidth,
-          tf: !!window.TF && !!window.TF.game,
-          pageErrors: (window.__pageErrors||[]).slice(0,3)
+          tf: !!window.TF && !!window.TF.game
         })`,
       });
       const info = JSON.parse(probe.result.value);
       const check = (label, ok) => (ok ? pass(label) : fail(label));
 
       check('页面脚本已启动（window.TF.game 存在）', info.tf);
-      check('青蛙立绘已渲染', info.frog);
-      check('三叶草田 12 格已渲染（实际 ' + info.plots + '）', info.plots === 12);
-      check('三叶草田是长好的状态（成熟 ' + info.ripe + ' 格）', info.ripe === 12);
-      check('开局赠予 20 三叶草已生效（实际 ' + info.clover + '）', info.clover === '20');
-      check('称号已填充（' + info.title + '）', !!info.title && info.title.length > 1);
-      check('底部 6 个页签齐全', info.tabs === 6);
+      check('树冠出发台已渲染（#scene svg.scene-svg）', info.hasScene);
+      check('小鸡已站在出发台上（#scene .rider）', info.rider);
+      check('三叶草畦有 4 株热区（实际 ' + info.patches + '）', info.patches === 4);
+      check('三叶草是长好的状态（成熟 ' + info.ripeHits + ' 株）', info.ripeHits === 4);
+      check('摇铃热区存在', info.bell);
+      check('开局赠予 8 三叶草（实际 ' + info.clover + '）', info.clover === '8');
+      check('旧的标签栏/插画按钮已拆除（.dock ' + info.dock + ' / .tab ' + info.tabs + '）', info.dock === 0 && info.tabs === 0);
+      check('开局在出发台（天空层/坐骑隐藏）', info.skyHidden && info.mountHidden);
+      check('新存档显示新手引导（第一步是摇铃）', info.guideShown && /铃/.test(info.guideTip));
       check('没有横向溢出（文档宽 ' + info.docW + ' ≤ 视口 ' + info.winW + '）', info.docW <= info.winW + 1);
 
-      if (tab) check('深链页签生效（当前屏 ' + info.visibleScreen + '）', info.visibleScreen === tab);
-
-      /* 走一遍关键交互：收割 → 买 → 出发 → 快进到归来 */
+      /* 走一遍关键交互：收草 → 摇铃 → 登机 → 飞行 → 滑翔 → 结算 */
       const flow = await client.send('Runtime.evaluate', {
         returnByValue: true,
         awaitPromise: false,
         expression: `(() => {
           const doc = document;
           const click = (sel) => { const e = doc.querySelector(sel); if (e) e.click(); return !!e; };
-          click('#btn-harvest-all');
-          const afterHarvest = doc.getElementById('num-clover').textContent;
-          click('.tab[data-tab="shop"]');
-          click('#shop-list .row .buy');
-          click('.tab[data-tab="bag"]');
-          click('#bag-food .row');
-          const previewShown = /可能去到：/.test(doc.getElementById('bag-preview').textContent);
-          click('#btn-depart');
-          window.TF.debug.advance(13000);
-          const away = window.TF.game.state.frog.state;
-          window.TF.debug.fastForwardToReturn();
+          click('#guide-skip');
+          click('#scene-hits .hit.ripe');
+          const afterHarvest = doc.querySelectorAll('#scene-hits .hit.ripe').length;
+          click('#scene-hits .hit-bell');
+          const phaseSummon = window.TF.game.view().ride && window.TF.game.view().ride.phase;
+          const mountComing = !doc.getElementById('mount-box').classList.contains('hidden');
+          window.TF.debug.advance(3500);
+          const phaseBoard = window.TF.game.view().ride.phase;
+          click('#mount-box');
+          const phaseFly = window.TF.game.view().ride.phase;
+          const skyShown = !doc.getElementById('sky-layers').classList.contains('hidden');
+          const hudShown = !doc.getElementById('flight-hud').classList.contains('hidden');
+          const layBg = doc.getElementById('lay-bg').style.backgroundImage;
+          const layCache = JSON.stringify(window.TF.UI.ui && 'ui-ok');
+          const mountUp = !!doc.querySelector('#mount-box .mount-svg');
+          window.TF.debug.advance(45000 + 500);
+          const phaseGlide = window.TF.game.view().ride.phase;
+          const rings = doc.querySelectorAll('#flight-fx .fx-ring').length;
+          const clouds = doc.querySelectorAll('#flight-fx .fx-cloud').length;
+          const thermals = doc.querySelectorAll('#flight-fx .fx-thermal').length;
+          const hintShown = !doc.getElementById('glide-hint').classList.contains('hidden');
+          window.TF.debug.advance(28000 + 500);
+          const phaseBack = window.TF.game.view().ride.phase;
+          window.TF.debug.fastForwardToLanding();
+          const phaseLand = window.TF.game.view().ride.phase;
           const modal = !doc.getElementById('modal').classList.contains('hidden');
-          const album = window.TF.game.state.album.length;
-          const cardSvg = !!doc.querySelector('#modal-box .postcard-view svg');
+          const cardSvg = !!doc.querySelector('#modal-box .settle-card svg');
+          const cardText = doc.getElementById('modal-box').textContent;
           click('#modal-box .m-primary');
-          // 图鉴是按屏懒渲染的：得先切到图鉴页再看卡位
-          click('.tab[data-tab="album"]');
-          const cards = doc.querySelectorAll('#album-grid .card').length;
-          const locked = doc.querySelectorAll('#album-grid .card.locked').length;
-          const progress = /已收集 1 \\/ 42/.test(doc.getElementById('album-grid').textContent);
-          click('.tab[data-tab="home"]');
-          return JSON.stringify({ afterHarvest, previewShown, away, modal, album, cardSvg,
-            badge: null, cards, locked, progress,
-            badgeText: '' });
+          const tripCount = window.TF.game.view().tripCount;
+          const rideGone = window.TF.game.view().ride === null;
+          const onboarded = window.TF.game.view().onboarded;
+          return JSON.stringify({ afterHarvest, phaseSummon, mountComing, phaseBoard, phaseFly,
+            skyShown, hudShown, layBg, mountUp, phaseGlide, rings, clouds, thermals, hintShown,
+            phaseBack, phaseLand, modal, cardSvg, cardText, tripCount, rideGone, onboarded });
         })()`,
       });
       const f = JSON.parse(flow.result.value);
-      check('收割后三叶草增加（' + f.afterHarvest + '）', Number(f.afterHarvest) > 20);
-      check('行囊能预告可能的目的地', f.previewShown);
-      check('青蛙真的出门了', f.away === 'away');
-      check('归来弹出了明信片，且照片渲染出来了', f.modal && f.cardSvg);
-      check('明信片入册 1 张（实际 ' + f.album + '）', f.album === 1);
-      check('图鉴列出 42 张卡位（实际 ' + f.cards + '）', f.cards === 42);
-      check('其中 41 张上锁、1 张已解锁（实际锁 ' + f.locked + '）', f.locked === 41);
-      check('图鉴进度文案正确', f.progress);
+      check('收草后剩 3 株（实际 ' + f.afterHarvest + '）', f.afterHarvest === 3);
+      check('摇铃后进入召唤相位（实际 ' + f.phaseSummon + '）', f.phaseSummon === 'summoning');
+      check('坐骑飞来了（mount-box 可见）', f.mountComing);
+      check('3 秒后落地待登机（实际 ' + f.phaseBoard + '）', f.phaseBoard === 'boarding');
+      check('点坐骑登机，进入飞行（实际 ' + f.phaseFly + '）', f.phaseFly === 'flying');
+      check('切到天空分层画面', f.skyShown);
+      check('飞行 HUD 出现', f.hudShown);
+      check('天空层是 SVG 平铺（data:image/svg+xml）', /data:image\/svg\+xml/.test(f.layBg));
+      check('坐骑载着乘客在天上（mount-svg）', f.mountUp);
+      check('45 秒后进入滑翔段（实际 ' + f.phaseGlide + '）', f.phaseGlide === 'gliding');
+      check('滑翔道具齐全（圈 ' + f.rings + ' / 云 ' + f.clouds + ' / 气流 ' + f.thermals + '）', f.rings >= 3 && f.clouds >= 3 && f.thermals >= 2);
+      check('滑翔操控提示出现', f.hintShown);
+      check('滑翔结束回到巡航（实际 ' + f.phaseBack + '）', f.phaseBack === 'flying');
+      check('落地进入待结算（实际 ' + f.phaseLand + '）', f.phaseLand === 'landed');
+      check('弹出了结算明信片卡，画面渲染出来', f.modal && f.cardSvg);
+      check('结算卡显示里程与纪念品', /飞行/.test(f.cardText) && /纪念品/.test(f.cardText));
+      check('收下后回到出发台（行程清空、旅程 1 次）', f.rideGone && f.tripCount === 1);
+      check('第一次出发后引导标记完成', f.onboarded);
     }
 
     /* ---------- 真实控制台异常 ---------- */
@@ -270,6 +298,84 @@ async function main() {
       if (size < 5000) fail('截图太小，可能没渲染：' + size + ' 字节');
       else pass('截图已导出 ' + shot + '（' + vw + 'x' + contentH + ' @' + dsr + 'x, ' + size + ' 字节）');
     }
+    /* ---------- 多视图截图（--views=<目录>）：一次起浏览器，连拍多张给人眼复核 ----------
+     * 每个视图：[文件名, 起始 query, 步骤序列]；步骤里数字 = 等多少毫秒，字符串 = 求值一次。
+     * 之所以放在冒烟脚本里而不是另写一个：起浏览器 + CDP 客户端的样板只该有一份。 */
+    const viewsDir = opt('views', '');
+    if (viewsDir) {
+      // 赚一张明信片要走的固定几步 —— 多个视图共用，避免各写一份（各写一份就会像刚才那样漏掉前置）
+      // 步骤约定：数字 = 等多少毫秒；'#选择器' = 等它出现再点（比固定 sleep 可靠）；其它字符串 = 求值
+      /* 一条旅程的固定步骤（多视图共用）：
+       *   摇铃 → 等落地 → 登机 → 飞行……到某一步再各自推进/截图 */
+      const RIDE_UP = [
+        'TF.debug.advance(30*60*1000)', '#scene-hits .hit-bell',
+        'TF.debug.advance(3500)', '#mount-box', 900,
+      ];
+      const VIEWS = [
+        ['1-home.png', '?reset=1', ['TF.debug.advance(30*60*1000)', '#scene-hits .hit.ripe', 900]],
+        ['2-summoning.png', '?reset=1', ['TF.debug.advance(30*60*1000)', '#scene-hits .hit-bell', 900]],
+        ['3-boarding.png', '?reset=1', RIDE_UP.slice(0, 4)],
+        ['4-flight.png', '?reset=1', RIDE_UP.concat([1200])],
+        ['5-glide.png', '?reset=1', RIDE_UP.concat(['TF.debug.advance(45500)', 1200])],
+        ['6-settle.png', '?reset=1', RIDE_UP.concat(['TF.debug.fastForwardToLanding()', 1200])],
+        ['7-menu.png', '?reset=1', ['TF.debug.advance(30*60*1000)', '#scene-hits .hit.ripe', '#btn-menu', 900]],
+      ];
+      fs.mkdirSync(viewsDir, { recursive: true });
+      for (const [file, query, steps] of VIEWS) {
+        await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html${query}` });
+        await sleep(900);
+        // 连拍视图是给人眼复核美术的：先关掉新手引导，免得每张图都带着引导纸片
+        await client.send('Runtime.evaluate', {
+          expression: '(window.TF && TF.debug && TF.debug.ui && TF.debug.ui.guideOff) ? TF.debug.ui.guideOff() : 0',
+        });
+        for (const st of steps) {
+          if (typeof st === 'number') { await sleep(st); continue; }
+          if (st[0] === '!') {                        // '!选择器' = 等它消失
+            for (let i = 0; i < 24; i++) {
+              const r = await client.send('Runtime.evaluate', {
+                returnByValue: true, expression: `!document.querySelector(${JSON.stringify(st.slice(1))})`,
+              });
+              if (r.result && r.result.value) break;
+              await sleep(250);
+            }
+            continue;
+          }
+          if (st[0] === '#') {                        // '#选择器' = 等它出现且没被禁用再点
+            let ok = false;
+            for (let i = 0; i < 24; i++) {
+              const r = await client.send('Runtime.evaluate', {
+                returnByValue: true,
+                // 只等「存在」不够：被禁用的按钮也存在，点了没反应（这里翻过车）
+                expression: `(function(){var e=document.querySelector(${JSON.stringify(st)});return !!e && !e.disabled;})()`,
+              });
+              if (r.result && r.result.value) { ok = true; break; }
+              await sleep(250);
+            }
+            if (!ok) fail('视图 ' + file + ' 等不到可点的 ' + st);
+            else await client.send('Runtime.evaluate', { expression: `document.querySelector(${JSON.stringify(st)}).click()` });
+            continue;
+          }
+          if (st[0] === '?') {                        // '?表达式' = 求值并打印（调试用）
+            const r = await client.send('Runtime.evaluate', {
+              returnByValue: true, expression: st.slice(1),
+            });
+            console.log('  · ' + file + ' → ' + JSON.stringify(r.result && r.result.value));
+            continue;
+          }
+          await client.send('Runtime.evaluate', { expression: st });
+        }
+        await sleep(400);
+        const out = path.join(viewsDir, file);
+        fs.rmSync(out, { force: true });          // 先删旧图，免得拿旧图冒充新图
+        const cap = await client.send('Page.captureScreenshot', { format: 'png' });
+        fs.writeFileSync(out, Buffer.from(cap.data, 'base64'));
+        const kb = Math.round(fs.statSync(out).size / 1024);
+        if (kb < 20) fail('视图 ' + file + ' 几乎是空图（' + kb + ' KB）');
+        else pass('视图已导出 ' + file + '（' + kb + ' KB）');
+      }
+      console.log('  📷 共 ' + VIEWS.length + ' 张 → ' + viewsDir);
+    }
+
   } finally {
     if (client) client.close();
     if (browser) {

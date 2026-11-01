@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>青蛙角度实验室（开发用）</title>
+<style>
+  body{margin:0;padding:20px;background:#f3ead3;font-family:"PingFang SC",system-ui,sans-serif;color:#4a3f2f}
+  h1{font-size:18px;margin:0 0 4px}
+  .note{font-size:11px;color:#7a6b52;margin-bottom:14px;max-width:960px;line-height:1.7}
+  table{border-collapse:separate;border-spacing:8px}
+  th{font-size:11px;color:#7a6b52;text-align:left;font-weight:700}
+  .cell{background:#fffdf6;border:2px solid #d6c7a4;border-radius:10px;width:124px;padding:4px}
+  .cell.big{border-width:3px;border-color:#8a6a45}
+  .cell .box{aspect-ratio:1;display:grid;place-items:center;background:#efe4c8;border-radius:5px}
+  .cell .box svg{width:88%;height:88%}
+  .cell .lbl{font-size:10px;font-weight:700;margin-top:4px;text-align:center}
+  .rowh{font-size:12px;font-weight:800;color:#4a3f2f;white-space:nowrap;padding-right:6px}
+</style>
+</head>
+<body>
+<h1>青蛙角度实验室：0°（现用） / 45° / 30°</h1>
+<div class="note">
+  三个朝向 × 同一套姿态。0° 是现在游戏里用的纯侧视；45° 是四分之三侧（两只眼都露，近眼大低、远眼小高）；
+  30° 接近正面（双眼几乎对称、嘴是横贯的 U、两个鼻孔）。选哪个告诉我，再把默认款换成它。
+</div>
+<div id="out"></div>
+<script src="../js/data.js"></script>
+<script src="../js/scene.js"></script>
+<script src="../js/art.js"></script>
+<script>
+(function () {
+  var S = TF.Scene;
+  var ROWS = [
+    ['', '0° 侧视（现用）'],
+    ['45', '45° 四分之三侧'],
+    ['30', '30° 近正面']
+  ];
+  var POSES = ['sit', 'idle', 'read', 'eat', 'walk', 'sleep', 'climb', 'umbrella', 'swim', 'nap'];
+  var h = '<table><tr><th></th>';
+  POSES.forEach(function (p) { h += '<th>' + p + '</th>'; });
+  h += '</tr>';
+  ROWS.forEach(function (r) {
+    h += '<tr><td class="rowh">' + r[1] + '</td>';
+    POSES.forEach(function (p) {
+      h += '<td><div class="cell' + (r[0] ? '' : ' big') + '"><div class="box">' +
+        '<svg viewBox="-52 -60 104 108">' + S.frogFigure(p, r[0] ? { style: r[0] } : undefined) + '</svg></div>' +
+        '<div class="lbl">' + (r[0] || '0°') + ' · ' + p + '</div></div></td>';
+    });
+    h += '</tr>';
+  });
+  h += '</table>';
+  /* 同姿态放大并排：sit / eat */
+  ['sit', 'eat'].forEach(function (p) {
+    h += '<h1 style="margin-top:22px">并排放大：' + p + '</h1><table><tr>';
+    ROWS.forEach(function (r) {
+      h += '<td><div class="cell" style="width:200px"><div class="box" style="aspect-ratio:1">' +
+        '<svg viewBox="-56 -64 112 116">' + S.frogFigure(p, r[0] ? { style: r[0] } : undefined) + '</svg></div>' +
+        '<div class="lbl">' + r[1] + '</div></div></td>';
+    });
+    h += '</tr></table>';
+  });
+  document.getElementById('out').innerHTML = h;
+})();
+</script>
+</body>
+</html>

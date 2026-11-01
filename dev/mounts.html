@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>坐骑实验室（开发用）</title>
+<style>
+  body{margin:0;padding:18px;background:#f3ead3;font-family:"PingFang SC",system-ui,sans-serif;color:#4a3f2f}
+  h1{font-size:17px;margin:0 0 4px}
+  .note{font-size:11px;color:#7a6b52;margin-bottom:12px;max-width:900px;line-height:1.7}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:960px}
+  .cell{background:#fffdf6;border:2px solid #d6c7a4;border-radius:10px;padding:6px}
+  .cell .box{aspect-ratio:16/11;display:grid;place-items:center;border-radius:6px}
+  .cell .box svg{width:92%;height:92%}
+  .cell .lbl{font-size:11px;font-weight:700;text-align:center;margin-top:4px}
+  .cell.night .box{background:#2a3f66}
+  .cell.day .box{background:#dceffa}
+</style>
+</head>
+<body>
+<h1>坐骑实验室：六种坐骑 × 乘客小鸡</h1>
+<div class="note">统一契约：面朝左、组原点 = 身体中心。夜行坐骑（猫头鹰 / 西方龙）用夜天色底。</div>
+<div id="out"></div>
+<script src="../js/data.js"></script>
+<script src="../js/art.js"></script>
+<script src="../js/world.js"></script>
+<script>
+(function () {
+  var D = TF.DATA, W = TF.World;
+  var h = '';
+  D.MOUNTS.forEach(function (m) {
+    var night = m.dayNight === 'night';
+    h += '<div class="cell ' + (night ? 'night' : 'day') + '"><div class="box">' +
+      W.mountSVG(m.id, night) + '</div><div class="lbl">' + m.name + '（' + (night ? '夜行' : '白天') + '）</div></div>';
+  });
+  document.getElementById('out').innerHTML = '<div class="grid">' + h + '</div>';
+})();
+</script>
+</body>
+</html>
