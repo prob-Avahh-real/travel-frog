@@ -395,12 +395,28 @@ test('art: 每个地点 × 每个时段都能产出非空 SVG', () => {
   }
 });
 
-/* ---------------- 10. 单文件产物存在（工程冒烟） ---------------- */
+/* ---------------- 10. 单文件产物与 Capacitor Android 壳存在（工程冒烟） ---------------- */
 test('project smoke: 关键文件存在且 index.html 引用了全部脚本', () => {
-  const need = ['index.html', 'package.json', 'capacitor.config.json', 'js/data.js', 'js/engine.js', 'js/art.js', 'js/ui.js', 'js/main.js', 'css/style.css'];
+  const need = [
+    'index.html',
+    'package.json',
+    'capacitor.config.json',
+    'js/data.js',
+    'js/engine.js',
+    'js/art.js',
+    'js/ui.js',
+    'js/main.js',
+    'css/style.css',
+    'android/app/build.gradle',
+    'android/app/src/main/AndroidManifest.xml',
+    'android/app/src/main/java/com/tabikaeru/travelfrog/MainActivity.java',
+    'android/app/src/main/assets/public/index.html',
+  ];
   for (const rel of need) assert.ok(fs.existsSync(path.join(ROOT, rel)), `缺少 ${rel}`);
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   for (const rel of ['js/data.js', 'js/engine.js', 'js/art.js', 'js/ui.js', 'js/main.js']) {
     assert.ok(html.includes(rel), `index.html 未引用 ${rel}`);
   }
+  const gradle = fs.readFileSync(path.join(ROOT, 'android/app/build.gradle'), 'utf8');
+  assert.match(gradle, /com\.tabikaeru\.travelfrog/);
 });

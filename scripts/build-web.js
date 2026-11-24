@@ -1,10 +1,12 @@
-/* 把 web 产物同步进 www/：单页游戏没有打包步骤，
-   只做「完整性检查 + 拷贝」，确保 Capacitor 拿到的是一份可跑的副本。 */
+/* 把 web 产物同步进 www/（及 android/app/src/main/assets/public/）：
+   单页游戏没有打包步骤，做「完整性检查 + 拷贝」，确保 Capacitor 拿到可跑的副本。 */
 const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
 const www = path.join(root, 'www');
+const androidPublic = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'public');
+const androidAssets = path.join(root, 'android', 'app', 'src', 'main', 'assets');
 const ASSETS = [
   'index.html',
   'css/style.css',
@@ -27,6 +29,20 @@ for (const rel of ASSETS) {
   const dest = path.join(www, rel);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(path.join(root, rel), dest);
+
+  if (fs.existsSync(path.join(root, 'android'))) {
+    const aDest = path.join(androidPublic, rel);
+    fs.mkdirSync(path.dirname(aDest), { recursive: true });
+    fs.copyFileSync(path.join(root, rel), aDest);
+  }
+}
+
+if (fs.existsSync(path.join(root, 'android')) && fs.existsSync(path.join(root, 'capacitor.config.json'))) {
+  fs.mkdirSync(androidAssets, { recursive: true });
+  fs.copyFileSync(
+    path.join(root, 'capacitor.config.json'),
+    path.join(androidAssets, 'capacitor.config.json')
+  );
 }
 
 // 冒烟：确认 www/index.html 引用的脚本都到位
